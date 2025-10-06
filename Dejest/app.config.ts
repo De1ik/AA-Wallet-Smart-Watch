@@ -47,5 +47,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     typedRoutes: true,
     reactCompiler: true,
   },
-
+  extra: {
+    KERNEL: '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A',
+  },
 });

@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { buildInstallPermissionUO, buildEnableSelectorUO, buildGrantAccessUO, sendUserOpV07, getRootCurrentNonce } from '@/utils/native-code';
+import { apiClient } from '@/utils/apiClient';
 import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey } from '@/utils/delegatedKeys';
 import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData } from '@/utils/smartWatchBridge';
@@ -182,18 +182,18 @@ export default function CreateDelegatedKeyScreen() {
         setBlockchainStep('Setting up sudo access permissions...');
         await updateDeviceProgress({ currentStep: 'Setting up sudo access permissions...', completedSteps: 0 });
         
-        const rootNonceBefore = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceBefore.toString());
-        setTransactionStatus(`Root nonce before: ${rootNonceBefore}`);
-        console.log('[ReactNative] -> Root nonce before:', rootNonceBefore);
+        const rootNonceBefore = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceBefore.nonce);
+        setTransactionStatus(`Root nonce before: ${rootNonceBefore.nonce}`);
+        console.log('[ReactNative] -> Root nonce before:', rootNonceBefore.nonce);
 
         // For sudo access: Install permission validation and grant access
         setBlockchainStep('Installing permission validation...');
         await updateDeviceProgress({ currentStep: 'Installing permission validation...', completedSteps: 0 });
         console.log('Installing permission validation for sudo access...');
-        const { unpacked: installUO, permissionId: permId, vId: validationId } = await buildInstallPermissionUO(delegatedEOA);
-        permissionId = permId;
-        vId = validationId;
+        const installResult = await apiClient.installPermission(delegatedEOA);
+        permissionId = installResult.permissionId;
+        vId = installResult.vId;
         console.log('Permission ID:', permissionId, 'vId:', vId);
         
         // Send install permission user operation
@@ -203,7 +203,7 @@ export default function CreateDelegatedKeyScreen() {
           transactionStatus: 'Sending transaction...',
           completedSteps: 0 
         });
-        const installTxHash = await sendUserOpV07(installUO);
+        const installTxHash = installResult.txHash;
         console.log('Install permission tx:', installTxHash);
         setTransactionStatus(`Install tx sent: ${installTxHash.slice(0, 10)}...`);
         
@@ -214,35 +214,35 @@ export default function CreateDelegatedKeyScreen() {
           transactionStatus: `Install tx sent: ${installTxHash.slice(0, 10)}...`,
           completedSteps: 0 
         });
-        let rootNonceAfterInstall = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceAfterInstall.toString());
-        console.log('[ReactNative] -> Root nonce after install:', rootNonceAfterInstall);
+        let rootNonceAfterInstall = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceAfterInstall.nonce);
+        console.log('[ReactNative] -> Root nonce after install:', rootNonceAfterInstall.nonce);
         
         // Add timeout mechanism (max 5 minutes)
         const maxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
         const startTime = Date.now();
         let attempts = 0;
         
-        while (rootNonceAfterInstall <= rootNonceBefore) {
+        while (BigInt(rootNonceAfterInstall.nonce) <= BigInt(rootNonceBefore.nonce)) {
             attempts++;
             const elapsedTime = Date.now() - startTime;
             
             if (elapsedTime > maxWaitTime) {
-                throw new Error(`Transaction timeout: Install transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterInstall}`);
+                throw new Error(`Transaction timeout: Install transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterInstall.nonce}`);
             }
             
-            setTransactionStatus(`Waiting for nonce update... (attempt ${attempts}, elapsed: ${Math.round(elapsedTime/1000)}s, current: ${rootNonceAfterInstall})`);
+            setTransactionStatus(`Waiting for nonce update... (attempt ${attempts}, elapsed: ${Math.round(elapsedTime/1000)}s, current: ${rootNonceAfterInstall.nonce})`);
             await updateDeviceProgress({ 
               currentStep: 'Waiting for install transaction to be mined...', 
               transactionStatus: `Waiting for nonce update... (attempt ${attempts}, elapsed: ${Math.round(elapsedTime/1000)}s)`,
-              currentNonce: rootNonceAfterInstall.toString(),
+              currentNonce: rootNonceAfterInstall.nonce,
               completedSteps: 0 
             });
-            console.log(`[ReactNative] -> Waiting for nonce update, attempt ${attempts}, current nonce: ${rootNonceAfterInstall}`);
+            console.log(`[ReactNative] -> Waiting for nonce update, attempt ${attempts}, current nonce: ${rootNonceAfterInstall.nonce}`);
             
             await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterInstall = await getRootCurrentNonce();
-            setCurrentNonce(rootNonceAfterInstall.toString());
+            rootNonceAfterInstall = await apiClient.getRootNonce();
+            setCurrentNonce(rootNonceAfterInstall.nonce);
         }
         setTransactionStatus('Install transaction confirmed!');
         await updateDeviceProgress({ 
@@ -259,7 +259,7 @@ export default function CreateDelegatedKeyScreen() {
           completedSteps: 1 
         });
         console.log('Granting access to execute selector...');
-        const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
+        const grantResult = await apiClient.grantAccess(vId);
         
         // Send grant access user operation
         setTransactionStatus('Sending grant access transaction...');
@@ -268,7 +268,7 @@ export default function CreateDelegatedKeyScreen() {
           transactionStatus: 'Sending grant transaction...',
           completedSteps: 1 
         });
-        const grantTxHash = await sendUserOpV07(grantUO);
+        const grantTxHash = grantResult.txHash;
         console.log('Grant access tx:', grantTxHash);
         setTransactionStatus(`Grant tx sent: ${grantTxHash.slice(0, 10)}...`);
 
@@ -279,35 +279,35 @@ export default function CreateDelegatedKeyScreen() {
           transactionStatus: `Grant tx sent: ${grantTxHash.slice(0, 10)}...`,
           completedSteps: 1 
         });
-        let rootNonceAfterGrant = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceAfterGrant.toString());
-        console.log('[ReactNative] -> Root nonce after grant:', rootNonceAfterGrant);
+        let rootNonceAfterGrant = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceAfterGrant.nonce);
+        console.log('[ReactNative] -> Root nonce after grant:', rootNonceAfterGrant.nonce);
         
         // Add timeout mechanism (max 5 minutes)
         const grantMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
         const grantStartTime = Date.now();
         let grantAttempts = 0;
         
-        while (rootNonceAfterGrant <= rootNonceAfterInstall) {
+        while (BigInt(rootNonceAfterGrant.nonce) <= BigInt(rootNonceAfterInstall.nonce)) {
             grantAttempts++;
             const grantElapsedTime = Date.now() - grantStartTime;
             
             if (grantElapsedTime > grantMaxWaitTime) {
-                throw new Error(`Transaction timeout: Grant transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterGrant}`);
+                throw new Error(`Transaction timeout: Grant transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterGrant.nonce}`);
             }
             
-            setTransactionStatus(`Waiting for nonce update... (attempt ${grantAttempts}, elapsed: ${Math.round(grantElapsedTime/1000)}s, current: ${rootNonceAfterGrant})`);
+            setTransactionStatus(`Waiting for nonce update... (attempt ${grantAttempts}, elapsed: ${Math.round(grantElapsedTime/1000)}s, current: ${rootNonceAfterGrant.nonce})`);
             await updateDeviceProgress({ 
               currentStep: 'Waiting for grant transaction to be mined...', 
               transactionStatus: `Waiting for nonce update... (attempt ${grantAttempts}, elapsed: ${Math.round(grantElapsedTime/1000)}s)`,
-              currentNonce: rootNonceAfterGrant.toString(),
+              currentNonce: rootNonceAfterGrant.nonce,
               completedSteps: 1 
             });
-            console.log(`[ReactNative] -> Waiting for grant nonce update, attempt ${grantAttempts}, current nonce: ${rootNonceAfterGrant}`);
+            console.log(`[ReactNative] -> Waiting for grant nonce update, attempt ${grantAttempts}, current nonce: ${rootNonceAfterGrant.nonce}`);
             
             await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterGrant = await getRootCurrentNonce();
-            setCurrentNonce(rootNonceAfterGrant.toString());
+            rootNonceAfterGrant = await apiClient.getRootNonce();
+            setCurrentNonce(rootNonceAfterGrant.nonce);
         }
         setTransactionStatus('Grant transaction confirmed!');
         await updateDeviceProgress({ 
@@ -345,118 +345,118 @@ export default function CreateDelegatedKeyScreen() {
         console.log('Token limits:', tokenLimits);
         console.log('Allow everyone:', allowEveryone);
         
-        const rootNonceBefore = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceBefore.toString());
-        setTransactionStatus(`Root nonce before: ${rootNonceBefore}`);
-        console.log('[ReactNative] -> Root nonce before:', rootNonceBefore);
+        const rootNonceBefore = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceBefore.nonce);
+        setTransactionStatus(`Root nonce before: ${rootNonceBefore.nonce}`);
+        console.log('[ReactNative] -> Root nonce before:', rootNonceBefore.nonce);
         
         // Install permission
         setBlockchainStep('Installing permission validation...');
-        const { unpacked: installUO, permissionId: permId, vId: validationId } = await buildInstallPermissionUO(delegatedEOA);
-        permissionId = permId;
-        vId = validationId;
+        const installResult = await apiClient.installPermission(delegatedEOA);
+        permissionId = installResult.permissionId;
+        vId = installResult.vId;
         
         setTransactionStatus('Sending install permission transaction...');
-        const installTxHash = await sendUserOpV07(installUO);
+        const installTxHash = installResult.txHash;
         console.log('[ReactNative] -> Install permission tx:', installTxHash);
         setTransactionStatus(`Install tx sent: ${installTxHash.slice(0, 10)}...`);
 
         // Wait for install transaction with timeout
         setBlockchainStep('Waiting for install transaction to be mined...');
-        let rootNonceAfterInstall = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceAfterInstall.toString());
-        console.log('[ReactNative] -> Root nonce after install:', rootNonceAfterInstall);
+        let rootNonceAfterInstall = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceAfterInstall.nonce);
+        console.log('[ReactNative] -> Root nonce after install:', rootNonceAfterInstall.nonce);
 
         // Add timeout mechanism (max 5 minutes)
         const installMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
         const installStartTime = Date.now();
         let installAttempts = 0;
 
-        while (rootNonceAfterInstall <= rootNonceBefore) {
+        while (BigInt(rootNonceAfterInstall.nonce) <= BigInt(rootNonceBefore.nonce)) {
             installAttempts++;
             const installElapsedTime = Date.now() - installStartTime;
             
             if (installElapsedTime > installMaxWaitTime) {
-                throw new Error(`Transaction timeout: Install transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterInstall}`);
+                throw new Error(`Transaction timeout: Install transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterInstall.nonce}`);
             }
             
-            setTransactionStatus(`Waiting for nonce update... (attempt ${installAttempts}, elapsed: ${Math.round(installElapsedTime/1000)}s, current: ${rootNonceAfterInstall})`);
-            console.log(`[ReactNative] -> Waiting for install nonce update, attempt ${installAttempts}, current nonce: ${rootNonceAfterInstall}`);
+            setTransactionStatus(`Waiting for nonce update... (attempt ${installAttempts}, elapsed: ${Math.round(installElapsedTime/1000)}s, current: ${rootNonceAfterInstall.nonce})`);
+            console.log(`[ReactNative] -> Waiting for install nonce update, attempt ${installAttempts}, current nonce: ${rootNonceAfterInstall.nonce}`);
             
             await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterInstall = await getRootCurrentNonce();
-            setCurrentNonce(rootNonceAfterInstall.toString());
+            rootNonceAfterInstall = await apiClient.getRootNonce();
+            setCurrentNonce(rootNonceAfterInstall.nonce);
         }
         setTransactionStatus('Install transaction confirmed!');
         
         // Enable selector
         setBlockchainStep('Enabling selector for restricted access...');
-        const { unpacked: enableUO } = await buildEnableSelectorUO(permissionId as `0x${string}`, vId as `0x${string}`, delegatedEOA, '0xe9ae5c53' as `0x${string}`);
+        const enableResult = await apiClient.enableSelector(permissionId, vId, delegatedEOA);
         
         setTransactionStatus('Sending enable selector transaction...');
-        const enableTxHash = await sendUserOpV07(enableUO);
+        const enableTxHash = enableResult.txHash;
         console.log('[ReactNative] -> Enable selector tx:', enableTxHash);
         setTransactionStatus(`Enable tx sent: ${enableTxHash.slice(0, 10)}...`);
 
         // Wait for enable transaction with timeout
         setBlockchainStep('Waiting for enable transaction to be mined...');
-        let rootNonceAfterEnable = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceAfterEnable.toString());
+        let rootNonceAfterEnable = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceAfterEnable.nonce);
         
         // Add timeout mechanism (max 5 minutes)
         const enableMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
         const enableStartTime = Date.now();
         let enableAttempts = 0;
         
-        while (rootNonceAfterEnable <= rootNonceAfterInstall) {
+        while (BigInt(rootNonceAfterEnable.nonce) <= BigInt(rootNonceAfterInstall.nonce)) {
             enableAttempts++;
             const enableElapsedTime = Date.now() - enableStartTime;
             
             if (enableElapsedTime > enableMaxWaitTime) {
-                throw new Error(`Transaction timeout: Enable transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterEnable}`);
+                throw new Error(`Transaction timeout: Enable transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterEnable.nonce}`);
             }
             
-            setTransactionStatus(`Waiting for nonce update... (attempt ${enableAttempts}, elapsed: ${Math.round(enableElapsedTime/1000)}s, current: ${rootNonceAfterEnable})`);
-            console.log(`[ReactNative] -> Waiting for enable nonce update, attempt ${enableAttempts}, current nonce: ${rootNonceAfterEnable}`);
+            setTransactionStatus(`Waiting for nonce update... (attempt ${enableAttempts}, elapsed: ${Math.round(enableElapsedTime/1000)}s, current: ${rootNonceAfterEnable.nonce})`);
+            console.log(`[ReactNative] -> Waiting for enable nonce update, attempt ${enableAttempts}, current nonce: ${rootNonceAfterEnable.nonce}`);
             
             await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterEnable = await getRootCurrentNonce();
-            setCurrentNonce(rootNonceAfterEnable.toString());
+            rootNonceAfterEnable = await apiClient.getRootNonce();
+            setCurrentNonce(rootNonceAfterEnable.nonce);
         }
         setTransactionStatus('Enable transaction confirmed!');
         
         // Grant access
         setBlockchainStep('Granting access to execute selector...');
-        const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
+        const grantResult = await apiClient.grantAccess(vId);
         
         setTransactionStatus('Sending grant access transaction...');
-        const grantTxHash = await sendUserOpV07(grantUO);
+        const grantTxHash = grantResult.txHash;
         setTransactionStatus(`Grant tx sent: ${grantTxHash.slice(0, 10)}...`);
         
         // Wait for grant transaction with timeout
         setBlockchainStep('Waiting for grant transaction to be mined...');
-        let rootNonceAfterGrant = await getRootCurrentNonce();
-        setCurrentNonce(rootNonceAfterGrant.toString());
+        let rootNonceAfterGrant = await apiClient.getRootNonce();
+        setCurrentNonce(rootNonceAfterGrant.nonce);
         
         // Add timeout mechanism (max 5 minutes)
         const finalGrantMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
         const finalGrantStartTime = Date.now();
         let finalGrantAttempts = 0;
         
-        while (rootNonceAfterGrant <= rootNonceAfterEnable) {
+        while (BigInt(rootNonceAfterGrant.nonce) <= BigInt(rootNonceAfterEnable.nonce)) {
             finalGrantAttempts++;
             const finalGrantElapsedTime = Date.now() - finalGrantStartTime;
             
             if (finalGrantElapsedTime > finalGrantMaxWaitTime) {
-                throw new Error(`Transaction timeout: Grant transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterGrant}`);
+                throw new Error(`Transaction timeout: Grant transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterGrant.nonce}`);
             }
             
-            setTransactionStatus(`Waiting for nonce update... (attempt ${finalGrantAttempts}, elapsed: ${Math.round(finalGrantElapsedTime/1000)}s, current: ${rootNonceAfterGrant})`);
-            console.log(`[ReactNative] -> Waiting for final grant nonce update, attempt ${finalGrantAttempts}, current nonce: ${rootNonceAfterGrant}`);
+            setTransactionStatus(`Waiting for nonce update... (attempt ${finalGrantAttempts}, elapsed: ${Math.round(finalGrantElapsedTime/1000)}s, current: ${rootNonceAfterGrant.nonce})`);
+            console.log(`[ReactNative] -> Waiting for final grant nonce update, attempt ${finalGrantAttempts}, current nonce: ${rootNonceAfterGrant.nonce}`);
             
             await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterGrant = await getRootCurrentNonce();
-            setCurrentNonce(rootNonceAfterGrant.toString());
+            rootNonceAfterGrant = await apiClient.getRootNonce();
+            setCurrentNonce(rootNonceAfterGrant.nonce);
         }
         setTransactionStatus('Grant transaction confirmed!');
         setBlockchainStep('Restricted delegated key created successfully!');
@@ -566,9 +566,12 @@ export default function CreateDelegatedKeyScreen() {
 
       // Step 1: Request key generation from smart watch
       console.log('Step 1: Requesting key generation from smart watch...');
-      const kernelAddress = getKernelAddress();
+      let kernelAddress = getKernelAddress();
+      
+      // Temporary fallback for debugging
       if (!kernelAddress) {
-        throw new Error('Kernel address not found in configuration');
+        console.log('[create-key] -> KERNEL not found in config, using fallback');
+        kernelAddress = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
       }
 
       console.log('[create-key] -> kernelAddress:', kernelAddress);

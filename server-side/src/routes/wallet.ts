@@ -1,7 +1,18 @@
 // server/routes/wallet.ts
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { buildDelegatedSendUO, getPermissionId, getVId, sendUserOpV07, UnpackedUserOperationV07 } from "../utils/native-code";
+import { 
+  buildDelegatedSendUO, 
+  getPermissionId, 
+  getVId, 
+  sendUserOpV07, 
+  UnpackedUserOperationV07,
+  buildInstallPermissionUO,
+  buildEnableSelectorUO,
+  buildGrantAccessUO,
+  buildUninstallPermissionUO,
+  getRootCurrentNonce
+} from "../utils/native-code";
 
 const router = Router();
 
@@ -138,6 +149,231 @@ router.post("/userOp/broadcast", async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error("[/userOp/broadcast] error:", err);
     return res.status(500).json({ error: err?.message ?? "internal error" });
+  }
+});
+
+/**
+ * Get current root nonce
+ * Response:
+ * {
+ *   "nonce": "123"
+ * }
+ */
+router.get("/nonce/root", async (_req: Request, res: Response) => {
+  try {
+    console.log('[nonce/root] -> Fetching root nonce...');
+    const nonce = await getRootCurrentNonce();
+    console.log('[nonce/root] -> Root nonce:', nonce.toString());
+    return res.json({ nonce: nonce.toString() });
+  } catch (err: any) {
+    console.error("[/nonce/root] error:", err);
+    return res.status(500).json({ 
+      error: "Failed to fetch root nonce",
+      details: err?.message ?? "internal error" 
+    });
+  }
+});
+
+/**
+ * Install permission validation for delegated key
+ * Body:
+ * {
+ *   "delegatedEOA": "0x..."  // string (required) - delegated EOA address
+ * }
+ * Response:
+ * {
+ *   "permissionId": "0x...",
+ *   "vId": "0x...",
+ *   "txHash": "0x..."
+ * }
+ */
+router.post("/delegated/install", async (req: Request, res: Response) => {
+  try {
+    console.log('[delegated/install] -> req.body:', req.body);
+    
+    const { delegatedEOA } = req.body ?? {};
+    
+    if (!delegatedEOA || typeof delegatedEOA !== "string") {
+      return res.status(400).json({ 
+        error: "delegatedEOA is required and must be a valid Ethereum address string" 
+      });
+    }
+    
+    if (!delegatedEOA.startsWith('0x') || delegatedEOA.length !== 42) {
+      return res.status(400).json({ 
+        error: "delegatedEOA must be a valid Ethereum address (0x + 40 hex chars)" 
+      });
+    }
+    
+    console.log('[delegated/install] -> Building install permission UO for:', delegatedEOA);
+    const { unpacked: installUO, permissionId, vId } = await buildInstallPermissionUO(delegatedEOA as `0x${string}`);
+    
+    console.log('[delegated/install] -> Sending user operation...');
+    const txHash = await sendUserOpV07(installUO);
+    
+    console.log('[delegated/install] -> Success! permissionId:', permissionId, 'vId:', vId, 'txHash:', txHash);
+    
+    return res.json({
+      permissionId,
+      vId,
+      txHash
+    });
+  } catch (err: any) {
+    console.error("[/delegated/install] error:", err);
+    return res.status(500).json({ 
+      error: "Failed to install permission validation",
+      details: err?.message ?? "internal error" 
+    });
+  }
+});
+
+/**
+ * Enable selector for delegated key
+ * Body:
+ * {
+ *   "permissionId": "0x...",  // string (required)
+ *   "vId": "0x...",          // string (required)
+ *   "delegatedEOA": "0x..."  // string (required)
+ * }
+ * Response:
+ * {
+ *   "txHash": "0x..."
+ * }
+ */
+router.post("/delegated/enable", async (req: Request, res: Response) => {
+  try {
+    console.log('[delegated/enable] -> req.body:', req.body);
+    
+    const { permissionId, vId, delegatedEOA } = req.body ?? {};
+    
+    if (!permissionId || typeof permissionId !== "string") {
+      return res.status(400).json({ error: "permissionId is required and must be a string" });
+    }
+    if (!vId || typeof vId !== "string") {
+      return res.status(400).json({ error: "vId is required and must be a string" });
+    }
+    if (!delegatedEOA || typeof delegatedEOA !== "string") {
+      return res.status(400).json({ error: "delegatedEOA is required and must be a string" });
+    }
+    
+    if (!delegatedEOA.startsWith('0x') || delegatedEOA.length !== 42) {
+      return res.status(400).json({ 
+        error: "delegatedEOA must be a valid Ethereum address (0x + 40 hex chars)" 
+      });
+    }
+    
+    console.log('[delegated/enable] -> Building enable selector UO...');
+    const { unpacked: enableUO } = await buildEnableSelectorUO(
+      permissionId as `0x${string}`,
+      vId as `0x${string}`,
+      delegatedEOA as `0x${string}`,
+      '0xe9ae5c53' as `0x${string}` // SEL_EXECUTE
+    );
+    
+    console.log('[delegated/enable] -> Sending user operation...');
+    const txHash = await sendUserOpV07(enableUO);
+    
+    console.log('[delegated/enable] -> Success! txHash:', txHash);
+    
+    return res.json({ txHash });
+  } catch (err: any) {
+    console.error("[/delegated/enable] error:", err);
+    return res.status(500).json({ 
+      error: "Failed to enable selector",
+      details: err?.message ?? "internal error" 
+    });
+  }
+});
+
+/**
+ * Grant access to execute selector for delegated key
+ * Body:
+ * {
+ *   "vId": "0x..."  // string (required)
+ * }
+ * Response:
+ * {
+ *   "txHash": "0x..."
+ * }
+ */
+router.post("/delegated/grant", async (req: Request, res: Response) => {
+  try {
+    console.log('[delegated/grant] -> req.body:', req.body);
+    
+    const { vId } = req.body ?? {};
+    
+    if (!vId || typeof vId !== "string") {
+      return res.status(400).json({ error: "vId is required and must be a string" });
+    }
+    
+    console.log('[delegated/grant] -> Building grant access UO...');
+    const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
+    
+    console.log('[delegated/grant] -> Sending user operation...');
+    const txHash = await sendUserOpV07(grantUO);
+    
+    console.log('[delegated/grant] -> Success! txHash:', txHash);
+    
+    return res.json({ txHash });
+  } catch (err: any) {
+    console.error("[/delegated/grant] error:", err);
+    return res.status(500).json({ 
+      error: "Failed to grant access",
+      details: err?.message ?? "internal error" 
+    });
+  }
+});
+
+/**
+ * Uninstall permission validation for delegated key
+ * Body:
+ * {
+ *   "delegatedEOA": "0x..."  // string (required) - delegated EOA address
+ * }
+ * Response:
+ * {
+ *   "permissionId": "0x...",
+ *   "vId": "0x...",
+ *   "txHash": "0x..."
+ * }
+ */
+router.post("/delegated/uninstall", async (req: Request, res: Response) => {
+  try {
+    console.log('[delegated/uninstall] -> req.body:', req.body);
+    
+    const { delegatedEOA } = req.body ?? {};
+    
+    if (!delegatedEOA || typeof delegatedEOA !== "string") {
+      return res.status(400).json({ 
+        error: "delegatedEOA is required and must be a valid Ethereum address string" 
+      });
+    }
+    
+    if (!delegatedEOA.startsWith('0x') || delegatedEOA.length !== 42) {
+      return res.status(400).json({ 
+        error: "delegatedEOA must be a valid Ethereum address (0x + 40 hex chars)" 
+      });
+    }
+    
+    console.log('[delegated/uninstall] -> Building uninstall permission UO for:', delegatedEOA);
+    const { unpacked: uninstallUO, permissionId, vId } = await buildUninstallPermissionUO(delegatedEOA as `0x${string}`);
+    
+    console.log('[delegated/uninstall] -> Sending user operation...');
+    const txHash = await sendUserOpV07(uninstallUO);
+    
+    console.log('[delegated/uninstall] -> Success! permissionId:', permissionId, 'vId:', vId, 'txHash:', txHash);
+    
+    return res.json({
+      permissionId,
+      vId,
+      txHash
+    });
+  } catch (err: any) {
+    console.error("[/delegated/uninstall] error:", err);
+    return res.status(500).json({ 
+      error: "Failed to uninstall permission validation",
+      details: err?.message ?? "internal error" 
+    });
   }
 });
 

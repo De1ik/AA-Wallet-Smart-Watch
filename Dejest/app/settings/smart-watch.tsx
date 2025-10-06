@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -10,6 +10,9 @@ export default function SmartWatchScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [showInstallationDetails, setShowInstallationDetails] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<DelegatedKeyData | null>(null);
+  const [revokeAddress, setRevokeAddress] = useState('');
+  const [showDeviceDetails, setShowDeviceDetails] = useState(false);
+  const [selectedDeviceForDetails, setSelectedDeviceForDetails] = useState<DelegatedKeyData | null>(null);
 
   // Load delegated keys on component mount
   useEffect(() => {
@@ -46,6 +49,42 @@ export default function SmartWatchScreen() {
   const handleCloseInstallationDetails = () => {
     setShowInstallationDetails(false);
     setSelectedDevice(null);
+  };
+
+  const handleShowDeviceDetails = (device: DelegatedKeyData) => {
+    setSelectedDeviceForDetails(device);
+    setShowDeviceDetails(true);
+  };
+
+  const handleCloseDeviceDetails = () => {
+    setShowDeviceDetails(false);
+    setSelectedDeviceForDetails(null);
+  };
+
+  const handleRevokeFromDetails = (device: DelegatedKeyData) => {
+    Alert.alert(
+      'Revoke Delegated Key',
+      `Are you sure you want to revoke the delegated key for "${device.deviceName}"?\n\nPublic Address: ${device.publicAddress}\n\nThis action cannot be undone and will permanently remove the key.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await removeDelegatedKey(device.id);
+              await loadDelegatedKeys();
+              setShowDeviceDetails(false);
+              setSelectedDeviceForDetails(null);
+              Alert.alert('Success', 'Delegated key revoked successfully');
+            } catch (error) {
+              console.error('Error revoking delegated key:', error);
+              Alert.alert('Error', 'Failed to revoke delegated key');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const getStatusColor = (status?: InstallationStatus) => {
@@ -98,6 +137,76 @@ export default function SmartWatchScreen() {
     );
   };
 
+  const handleRevokeByAddress = () => {
+    if (!revokeAddress.trim()) {
+      Alert.alert('Error', 'Please enter a public address');
+      return;
+    }
+
+    Alert.alert(
+      'Revoke Delegated Key',
+      `Are you sure you want to revoke the delegated key for address:\n\n${revokeAddress}\n\nThis action cannot be undone and will permanently remove the key.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const keys = await getDelegatedKeys();
+              const keyToRevoke = keys.find(key => key.publicAddress.toLowerCase() === revokeAddress.toLowerCase());
+              
+              if (!keyToRevoke) {
+                Alert.alert('Error', 'No delegated key found with this public address');
+                return;
+              }
+
+              await removeDelegatedKey(keyToRevoke.id);
+              await loadDelegatedKeys();
+              setRevokeAddress('');
+              Alert.alert('Success', 'Delegated key revoked successfully');
+            } catch (error) {
+              console.error('Error revoking delegated key:', error);
+              Alert.alert('Error', 'Failed to revoke delegated key');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleRevokeAllKeys = () => {
+    if (connectedDevices.length === 0) {
+      Alert.alert('Info', 'No delegated keys to revoke');
+      return;
+    }
+
+    Alert.alert(
+      'Revoke All Delegated Keys',
+      `Are you sure you want to revoke ALL ${connectedDevices.length} delegated keys?\n\nThis action cannot be undone and will permanently remove all keys. Your smart watches will no longer be able to perform transactions.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Remove all keys
+              for (const device of connectedDevices) {
+                await removeDelegatedKey(device.id);
+              }
+              await loadDelegatedKeys();
+              Alert.alert('Success', 'All delegated keys have been revoked successfully');
+            } catch (error) {
+              console.error('Error revoking all delegated keys:', error);
+              Alert.alert('Error', 'Failed to revoke some or all delegated keys');
+            }
+          }
+        }
+      ]
+    );
+  };
+
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
@@ -124,6 +233,15 @@ export default function SmartWatchScreen() {
               Create delegated keys for your smart watch to enable secure, limited transactions directly from your wrist.
             </Text>
           </View>
+
+          {/* Create New Key Button - Moved to top */}
+          <TouchableOpacity 
+            style={styles.createButton}
+            onPress={handleCreateDelegatedKey}
+          >
+            <IconSymbol name="plus" size={20} color="#FFFFFF" />
+            <Text style={styles.createButtonText}>Create New Delegated Key</Text>
+          </TouchableOpacity>
 
           {/* Connected Devices */}
           <View style={styles.section}>
@@ -182,16 +300,29 @@ export default function SmartWatchScreen() {
                           {device.permissionId.slice(0, 10)}...
                         </Text>
                       </View>
+                      
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Public Address:</Text>
+                        <Text style={styles.detailValue}>
+                          {device.publicAddress.slice(0, 10)}...
+                        </Text>
+                      </View>
                     </View>
                   </View>
                   
                   <View style={styles.deviceActions}>
+                    <TouchableOpacity
+                      style={styles.detailsButton}
+                      onPress={() => handleShowDeviceDetails(device)}
+                    >
+                      <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
+                    </TouchableOpacity>
                     {device.installationStatus === 'installing' && (
                       <TouchableOpacity
-                        style={styles.detailsButton}
+                        style={styles.installationDetailsButton}
                         onPress={() => handleShowInstallationDetails(device)}
                       >
-                        <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
+                        <IconSymbol name="clock" size={16} color="#F59E0B" />
                       </TouchableOpacity>
                     )}
                     <TouchableOpacity
@@ -214,14 +345,45 @@ export default function SmartWatchScreen() {
             )}
           </View>
 
-          {/* Create New Key Button */}
-          <TouchableOpacity 
-            style={styles.createButton}
-            onPress={handleCreateDelegatedKey}
-          >
-            <IconSymbol name="plus" size={20} color="#FFFFFF" />
-            <Text style={styles.createButtonText}>Create New Delegated Key</Text>
-          </TouchableOpacity>
+          {/* Revoke Keys Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Revoke Delegated Keys</Text>
+            
+            {/* Revoke by Address */}
+            <View style={styles.revokeSection}>
+              <Text style={styles.revokeSectionTitle}>Revoke by Public Address</Text>
+              <View style={styles.revokeInputContainer}>
+                <TextInput
+                  style={styles.revokeInput}
+                  placeholder="Enter public address..."
+                  placeholderTextColor="#666666"
+                  value={revokeAddress}
+                  onChangeText={setRevokeAddress}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  style={styles.revokeButton}
+                  onPress={handleRevokeByAddress}
+                >
+                  <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                  <Text style={styles.revokeButtonText}>Revoke</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Revoke All Keys */}
+            <View style={styles.revokeSection}>
+              <Text style={styles.revokeSectionTitle}>Revoke All Keys</Text>
+              <TouchableOpacity
+                style={styles.revokeAllButton}
+                onPress={handleRevokeAllKeys}
+              >
+                <IconSymbol name="trash.fill" size={20} color="#FFFFFF" />
+                <Text style={styles.revokeAllButtonText}>Revoke All Delegated Keys</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
           {/* Security Notice */}
           <View style={styles.securityNotice}>
@@ -312,6 +474,120 @@ export default function SmartWatchScreen() {
                   <Text style={styles.modalNoteText}>
                     This device is being set up on the blockchain. The process may take a few minutes.
                   </Text>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Device Details Modal */}
+      <Modal
+        visible={showDeviceDetails}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={handleCloseDeviceDetails}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Device Details</Text>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={handleCloseDeviceDetails}
+              >
+                <IconSymbol name="xmark" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+            
+            {selectedDeviceForDetails && (
+              <View style={styles.modalContent}>
+                <View style={styles.deviceInfoHeader}>
+                  <IconSymbol name="applewatch" size={32} color="#8B5CF6" />
+                  <Text style={styles.modalDeviceName}>{selectedDeviceForDetails.deviceName}</Text>
+                </View>
+                
+                <View style={styles.detailsContainer}>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Key Type:</Text>
+                    <View style={[
+                      styles.keyTypeBadge,
+                      selectedDeviceForDetails.keyType === 'sudo' ? styles.sudoBadge : styles.restrictedBadge
+                    ]}>
+                      <Text style={[
+                        styles.keyTypeText,
+                        selectedDeviceForDetails.keyType === 'sudo' ? styles.sudoText : styles.restrictedText
+                      ]}>
+                        {selectedDeviceForDetails.keyType === 'sudo' ? 'Sudo Access' : 'Restricted Access'}
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Created:</Text>
+                    <Text style={styles.detailValue}>
+                      {new Date(selectedDeviceForDetails.createdAt).toLocaleDateString()}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Permission ID:</Text>
+                    <Text style={styles.detailValueFull}>
+                      {selectedDeviceForDetails.permissionId}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Public Address:</Text>
+                    <Text style={styles.detailValueFull}>
+                      {selectedDeviceForDetails.publicAddress}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>vId:</Text>
+                    <Text style={styles.detailValueFull}>
+                      {selectedDeviceForDetails.vId}
+                    </Text>
+                  </View>
+                  
+                  {selectedDeviceForDetails.whitelistAddresses && selectedDeviceForDetails.whitelistAddresses.length > 0 && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Whitelist Addresses:</Text>
+                      <View style={styles.addressList}>
+                        {selectedDeviceForDetails.whitelistAddresses.map((address, index) => (
+                          <Text key={index} style={styles.detailValueFull}>
+                            {address}
+                          </Text>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                  
+                  {selectedDeviceForDetails.tokenLimits && selectedDeviceForDetails.tokenLimits.length > 0 && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Token Limits:</Text>
+                      <View style={styles.tokenLimitsList}>
+                        {selectedDeviceForDetails.tokenLimits.map((limit, index) => (
+                          <View key={index} style={styles.tokenLimitItem}>
+                            <Text style={styles.detailValueFull}>
+                              {limit.tokenSymbol}: {limit.maxAmountPerTx} per tx, {limit.maxAmountPerDay} per day
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                </View>
+                
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.revokeFromDetailsButton}
+                    onPress={() => handleRevokeFromDetails(selectedDeviceForDetails)}
+                  >
+                    <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                    <Text style={styles.revokeFromDetailsButtonText}>Revoke Key</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             )}
@@ -448,6 +724,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#FFFFFF',
     fontWeight: '500',
+  },
+  detailValueFull: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    fontWeight: '500',
+    fontFamily: 'monospace',
+    flex: 1,
+    flexWrap: 'wrap',
   },
   keyTypeBadge: {
     paddingHorizontal: 8,
@@ -676,5 +960,100 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#A0A0A0',
     lineHeight: 16,
+  },
+  revokeSection: {
+    marginBottom: 20,
+  },
+  revokeSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 12,
+  },
+  revokeInputContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  revokeInput: {
+    flex: 1,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  revokeButton: {
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  revokeButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  revokeAllButton: {
+    backgroundColor: '#DC2626',
+    borderRadius: 12,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#EF4444',
+  },
+  revokeAllButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  installationDetailsButton: {
+    padding: 8,
+    backgroundColor: '#2A1A0A',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  detailsContainer: {
+    marginBottom: 20,
+  },
+  addressList: {
+    flex: 1,
+  },
+  tokenLimitsList: {
+    flex: 1,
+  },
+  tokenLimitItem: {
+    marginBottom: 4,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#333333',
+  },
+  revokeFromDetailsButton: {
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  revokeFromDetailsButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
