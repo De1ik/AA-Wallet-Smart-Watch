@@ -9,7 +9,7 @@ export interface TokenLimit {
   maxAmountPerTx: string;
 }
 
-export type InstallationStatus = 'installing' | 'completed' | 'failed';
+export type InstallationStatus = 'installing' | 'granting' | 'completed' | 'failed';
 
 export interface DelegatedKeyData {
   id: string;
@@ -117,6 +117,34 @@ export const removeDelegatedKey = async (id: string): Promise<void> => {
     console.log('Delegated key removed successfully:', id);
   } catch (error) {
     console.error('Error removing delegated key:', error);
+    throw error;
+  }
+};
+
+/**
+ * Remove all stuck installations (installing status)
+ */
+export const removeStuckInstallations = async (): Promise<void> => {
+  try {
+    const keys = await getDelegatedKeys();
+    const filteredKeys = keys.filter(key => key.installationStatus !== 'installing');
+    await AsyncStorage.setItem('delegatedKeys', JSON.stringify(filteredKeys));
+    console.log('Stuck installations removed successfully');
+  } catch (error) {
+    console.error('Error removing stuck installations:', error);
+    throw error;
+  }
+};
+
+/**
+ * Clear all delegated keys (for debugging/cleanup)
+ */
+export const clearAllDelegatedKeys = async (): Promise<void> => {
+  try {
+    await AsyncStorage.removeItem('delegatedKeys');
+    console.log('All delegated keys cleared successfully');
+  } catch (error) {
+    console.error('Error clearing all delegated keys:', error);
     throw error;
   }
 };

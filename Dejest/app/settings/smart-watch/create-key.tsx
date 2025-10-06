@@ -10,6 +10,7 @@ import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegate
 import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData } from '@/utils/smartWatchBridge';
 import { getKernelAddress } from '@/utils/config';
+import { installationState } from '@/utils/installationState';
 
 export default function CreateDelegatedKeyScreen() {
   const [keyType, setKeyType] = useState<KeyType>('restricted');
@@ -20,15 +21,7 @@ export default function CreateDelegatedKeyScreen() {
   const [generatedKeyPair, setGeneratedKeyPair] = useState<WatchKeyPair | null>(null);
   const [showAddressConfirmation, setShowAddressConfirmation] = useState(false);
   const [pendingKeyPair, setPendingKeyPair] = useState<WatchKeyPair | null>(null);
-  const [blockchainStep, setBlockchainStep] = useState<string>('');
-  const [currentNonce, setCurrentNonce] = useState<string>('0');
-  const [transactionStatus, setTransactionStatus] = useState<string>('');
   const [isAborting, setIsAborting] = useState(false);
-  
-  // Simplified installation state
-  const [installationStep, setInstallationStep] = useState<'installing' | 'granting' | 'completed' | 'failed'>('installing');
-  const [installationProgress, setInstallationProgress] = useState(0);
-  const [installationMessage, setInstallationMessage] = useState('');
   
   // Smart watch integration
   const { 
@@ -150,14 +143,9 @@ export default function CreateDelegatedKeyScreen() {
 
   const handleCancelOperation = () => {
     setIsAborting(true);
-    setBlockchainStep('Cancelling operation...');
-    setTransactionStatus('Operation cancelled by user');
     setIsConnecting(false);
     // Reset states
     setTimeout(() => {
-      setBlockchainStep('');
-      setTransactionStatus('');
-      setCurrentNonce('0');
       setIsAborting(false);
     }, 2000);
   };
@@ -165,73 +153,24 @@ export default function CreateDelegatedKeyScreen() {
   const continueWithBlockchainOperations = async (keyPair: WatchKeyPair, deviceId: string) => {
     try {
       // Step 2: Use simplified API for delegated key creation
-      setBlockchainStep('Starting installation...');
-      setInstallationStep('installing');
-      setInstallationProgress(0);
-      setInstallationMessage('Connecting to server...');
       
       console.log('Step 2: Creating delegated access on blockchain...');
       const delegatedEOA = keyPair.address as `0x${string}`;
 
-      // Connect to WebSocket for real-time updates
-      wsClient.connect(
-        (status: InstallationStatus) => {
-          console.log('[ReactNative] Status update:', status);
-          setInstallationStep(status.step);
-          setInstallationProgress(status.progress);
-          setInstallationMessage(status.message);
-          
-          if (status.txHash) {
-            setTransactionStatus(`Tx: ${status.txHash.slice(0, 10)}...`);
-          }
-          
-          if (status.step === 'completed') {
-            handleInstallationComplete(keyPair, deviceId);
-          } else if (status.step === 'failed') {
-            handleInstallationError(status.error || 'Unknown error', deviceId);
-          }
-        },
-        (connected: boolean) => {
-          console.log('[ReactNative] WebSocket connection:', connected);
-          
-          // Handle WebSocket connection loss
-          if (!connected) {
-            setInstallationMessage('Connection lost. Attempting to reconnect...');
-            
-            // Show a warning but don't fail the operation immediately
-            // The WebSocket client will attempt to reconnect automatically
-            setTimeout(() => {
-              if (!wsClient.isConnected()) {
-                Alert.alert(
-                  'Connection Lost',
-                  'Lost connection to the server. The installation may still be in progress. Please check your internet connection and try again if needed.',
-                  [
-                    {
-                      text: 'Continue',
-                      onPress: () => {
-                        // Allow user to continue waiting or cancel
-                      }
-                    },
-                    {
-                      text: 'Cancel',
-                      style: 'cancel',
-                      onPress: () => {
-                        wsClient.disconnect();
-                        setIsConnecting(false);
-                      }
-                    }
-                  ]
-                );
-              }
-            }, 10000); // Wait 10 seconds before showing the alert
-      } else {
-            setInstallationMessage('Connected to server. Installation in progress...');
-          }
+      // Navigate to installation progress screen (state is now managed globally)
+      router.push({
+        pathname: '/settings/smart-watch/installation-progress',
+        params: {
+          deviceId: deviceId,
+          deviceName: deviceName.trim(),
+          keyType: keyType,
         }
-      );
+      });
+
+      // Start global installation state tracking
+      installationState.startInstallation(deviceId, deviceName.trim(), keyType);
 
       // Check prefund first
-      setInstallationMessage('Checking account balance...');
       try {
         const prefundCheck = await apiClient.checkPrefund();
         if (!prefundCheck.hasPrefund) {
@@ -251,7 +190,6 @@ export default function CreateDelegatedKeyScreen() {
       });
 
       console.log('Installation started:', result);
-      setInstallationMessage('Installation started on server...');
 
     } catch (error) {
       console.error('Error starting blockchain operations:', error);
@@ -263,20 +201,20 @@ export default function CreateDelegatedKeyScreen() {
   const handleInstallationComplete = async (keyPair: WatchKeyPair, deviceId: string) => {
     try {
       // Step 3: Save delegated key data to AsyncStorage
-      setBlockchainStep('Saving delegated key data...');
-      setTransactionStatus('Storing key data locally...');
-      console.log('Step 3: Saving delegated key data...');
+      console.log('[CreateKey] Installation completed! Updating status to completed for device:', deviceId);
       
       // For now, we'll use placeholder values since the server doesn't return them yet
       // In a real implementation, the server should return permissionId and vId
       const delegatedKeyData: DelegatedKeyData = {
-        id: Date.now().toString(),
+        id: deviceId, // Use the same deviceId that was created initially
         deviceName: deviceName.trim(),
         keyType,
         permissionId: '0x00000000', // Placeholder - should come from server
         vId: '0x000000000000000000000000000000000000000000', // Placeholder - should come from server
         publicAddress: keyPair.address,
         createdAt: new Date().toISOString(),
+        installationStatus: 'completed', // Mark as completed
+        installationProgress: undefined, // Clear progress data when completed
         ...(keyType === 'restricted' && {
           whitelistAddresses: allowEveryone ? [] : whitelistAddresses,
           tokenLimits,
@@ -284,12 +222,8 @@ export default function CreateDelegatedKeyScreen() {
         })
       };
 
-      await saveDelegatedKey(delegatedKeyData);
-      setTransactionStatus('Key data saved locally!');
-      
+      await updateDelegatedKey(deviceId, delegatedKeyData);
       // Step 4: Send permission data to smart watch for storage
-      setBlockchainStep('Syncing permission data to smart watch...');
-      setTransactionStatus('Sending data to Apple Watch...');
       console.log('Step 4: Syncing permission data to smart watch...');
       const watchPermissionData: WatchPermissionData = {
         permissionId: delegatedKeyData.permissionId,
@@ -300,8 +234,6 @@ export default function CreateDelegatedKeyScreen() {
       };
 
       await syncPermissionData(watchPermissionData);
-      setTransactionStatus('Permission data synced to watch!');
-      setBlockchainStep('Setup complete!');
       console.log('Permission data synced to smart watch successfully!');
       
       Alert.alert(
@@ -768,113 +700,6 @@ export default function CreateDelegatedKeyScreen() {
               </View>
             )}
 
-            {/* Simplified Installation Progress Section */}
-            {isConnecting && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Installation Progress</Text>
-                
-                <View style={styles.simpleProgressContainer}>
-                  {/* Step 1: Installing */}
-                  <View style={styles.stepContainer}>
-                    <View style={[
-                      styles.stepCircle,
-                      (installationStep === 'installing' || installationStep === 'granting' || installationStep === 'completed') && styles.stepCircleActive,
-                      installationStep === 'completed' && styles.stepCircleCompleted
-                    ]}>
-                      <Text style={[
-                        styles.stepText,
-                        (installationStep === 'installing' || installationStep === 'granting' || installationStep === 'completed') && styles.stepTextActive
-                      ]}>
-                        Installing
-                      </Text>
-                    </View>
-                    {installationStep !== 'installing' && (
-                      <View style={styles.stepArrow}>
-                        <Text style={styles.stepArrowText}>→</Text>
-                      </View>
-                    )}
-                  </View>
-                  
-                  {/* Step 2: Grant */}
-                  <View style={styles.stepContainer}>
-                    <View style={[
-                      styles.stepCircle,
-                      (installationStep === 'granting' || installationStep === 'completed') && styles.stepCircleActive,
-                      installationStep === 'completed' && styles.stepCircleCompleted
-                    ]}>
-                      <Text style={[
-                        styles.stepText,
-                        (installationStep === 'granting' || installationStep === 'completed') && styles.stepTextActive
-                      ]}>
-                        Grant
-                      </Text>
-                    </View>
-                    {installationStep !== 'granting' && installationStep !== 'completed' && (
-                      <View style={styles.stepArrow}>
-                        <Text style={styles.stepArrowText}>→</Text>
-                    </View>
-                  )}
-                  </View>
-
-                  {/* Step 3: Complete */}
-                  <View style={styles.stepContainer}>
-                    <View style={[
-                      styles.stepCircle,
-                      installationStep === 'completed' && styles.stepCircleCompleted
-                    ]}>
-                      <Text style={[
-                        styles.stepText,
-                        installationStep === 'completed' && styles.stepTextCompleted
-                      ]}>
-                        {installationStep === 'completed' ? '✓' : 'Complete'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Progress Message */}
-                {installationMessage && (
-                  <View style={styles.progressMessageContainer}>
-                    <Text style={styles.progressMessage}>{installationMessage}</Text>
-                    {installationProgress > 0 && (
-                      <View style={styles.progressBarContainer}>
-                        <View style={styles.progressBar}>
-                          <View style={[styles.progressBarFill, { width: `${installationProgress}%` }]} />
-                        </View>
-                        <Text style={styles.progressPercentage}>{installationProgress}%</Text>
-                      </View>
-                    )}
-                    </View>
-                  )}
-                  
-                {/* Transaction Status */}
-                {transactionStatus && (
-                  <View style={styles.transactionStatusContainer}>
-                    <Text style={styles.transactionStatusText}>{transactionStatus}</Text>
-                    </View>
-                  )}
-                  
-                {/* Progress Note */}
-                  <View style={styles.progressNote}>
-                    <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
-                    <Text style={styles.progressNoteText}>
-                      Please wait while we set up your delegated key on the blockchain. This may take a few minutes.
-                    </Text>
-                  </View>
-                  
-                {/* Cancel Button */}
-                  <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={handleCancelOperation}
-                    disabled={isAborting}
-                  >
-                    <IconSymbol name="xmark" size={16} color="#EF4444" />
-                    <Text style={styles.cancelButtonText}>
-                      {isAborting ? 'Cancelling...' : 'Cancel Operation'}
-                    </Text>
-                  </TouchableOpacity>
-              </View>
-            )}
 
             {/* Create Button */}
             <TouchableOpacity 
@@ -889,7 +714,7 @@ export default function CreateDelegatedKeyScreen() {
                 <>
                   <IconSymbol name="arrow.clockwise" size={20} color="#FFFFFF" />
                   <Text style={styles.createButtonText}>
-                    {blockchainStep ? blockchainStep : generatedKeyPair ? 'Creating on Blockchain...' : 'Requesting Keys from Watch...'}
+                    {generatedKeyPair ? 'Creating on Blockchain...' : 'Requesting Keys from Watch...'}
                   </Text>
                 </>
               ) : !isWatchConnected ? (

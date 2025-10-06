@@ -787,6 +787,28 @@ import {
     const vId = vIdFromPermissionId(permissionId)
     return vId
   }
+
+
+  export async function depositToEntryPoint() {
+    const walletClient = createWalletClient({
+      chain: sepolia,
+      transport: http(ETH_RPC_URL),
+      account: root, // Specify the account to fix the error
+    });
+  
+    const { request } = await publicClient.simulateContract({
+      address: ENTRY_POINT,
+      abi: stakeAbi,
+      functionName: 'depositTo',
+      args: [KERNEL],
+      account: root, // Specify the account for simulation as well
+      value: DEPOSIT_AMOUNT, // Ensure value is set for payable function
+    });
+    const res = await walletClient.writeContract(request);
+    console.log('Deposit to EntryPoint result:', res);
+    console.log('Deposit to EntryPoint successful');
+    return res
+  }
   
   
   // ===== main =====

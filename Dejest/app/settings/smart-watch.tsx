@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, TextInput, ActivityIndicator, Clipboard } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, InstallationStatus } from '@/utils/delegatedKeys';
+import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, InstallationStatus, removeStuckInstallations, clearAllDelegatedKeys, updateDelegatedKey } from '@/utils/delegatedKeys';
 import { apiClient } from '@/utils/apiClient';
+import { installationState, GlobalInstallationState } from '@/utils/installationState';
 
 export default function SmartWatchScreen() {
   const [connectedDevices, setConnectedDevices] = useState<DelegatedKeyData[]>([]);
@@ -15,16 +17,90 @@ export default function SmartWatchScreen() {
   const [showDeviceDetails, setShowDeviceDetails] = useState(false);
   const [selectedDeviceForDetails, setSelectedDeviceForDetails] = useState<DelegatedKeyData | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [showAddressModal, setShowAddressModal] = useState(false);
+  const [selectedAddress, setSelectedAddress] = useState('');
+  const [ongoingInstallation, setOngoingInstallation] = useState<DelegatedKeyData | null>(null);
+  const [globalInstallationState, setGlobalInstallationState] = useState<GlobalInstallationState>(installationState.getState());
 
-  // Load delegated keys on component mount
+  // Load delegated keys on component mount and when focused
   useEffect(() => {
     loadDelegatedKeys();
   }, []);
 
+  // Subscribe to global installation state changes
+  useEffect(() => {
+    const unsubscribe = installationState.subscribe((state) => {
+      console.log('[SmartWatch] Global installation state update:', state);
+      setGlobalInstallationState(state);
+      
+      // Update ongoing installation based on global state
+      if (state.isInstalling && state.deviceId) {
+        const installationData = installationState.getInstallationData();
+        setOngoingInstallation(installationData);
+      } else {
+        setOngoingInstallation(null);
+      }
+      
+      // Reload delegated keys when installation completes
+      if (state.status?.step === 'completed') {
+        setTimeout(() => {
+          loadDelegatedKeys();
+        }, 1000);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadDelegatedKeys();
+    }, [])
+  );
+
   const loadDelegatedKeys = async () => {
     try {
+      setIsLoading(true);
       const keys = await getDelegatedKeys();
-      setConnectedDevices(keys);
+      
+      // Check for stuck installations (installing status with old timestamps)
+      const now = new Date();
+      const stuckInstallations = keys.filter(key => {
+        if (key.installationStatus !== 'installing') return false;
+        const createdAt = new Date(key.createdAt);
+        const timeDiff = now.getTime() - createdAt.getTime();
+        const hoursDiff = timeDiff / (1000 * 60 * 60);
+        return hoursDiff > 1; // Consider stuck if older than 1 hour
+      });
+      
+      // Remove stuck installations automatically
+      if (stuckInstallations.length > 0) {
+        console.log('Found stuck installations, removing:', stuckInstallations.length);
+        const filteredKeys = keys.filter(key => !stuckInstallations.includes(key));
+        await AsyncStorage.setItem('delegatedKeys', JSON.stringify(filteredKeys));
+        // Reload with cleaned data
+        const cleanedKeys = filteredKeys;
+        
+        // Separate ongoing installation from completed devices
+        const ongoing = cleanedKeys.find(key => key.installationStatus === 'installing' || key.installationStatus === 'granting');
+        const completed = cleanedKeys.filter(key => key.installationStatus === 'completed' || !key.installationStatus);
+        
+        console.log('[SmartWatch] Loaded keys - Ongoing:', ongoing?.deviceName, 'Completed:', completed.length);
+        
+        setOngoingInstallation(ongoing || null);
+        setConnectedDevices(completed);
+      } else {
+        // Separate ongoing installation from completed devices
+        const ongoing = keys.find(key => key.installationStatus === 'installing' || key.installationStatus === 'granting');
+        const completed = keys.filter(key => key.installationStatus === 'completed' || !key.installationStatus);
+        
+        console.log('[SmartWatch] Loaded keys - Ongoing:', ongoing?.deviceName, 'Completed:', completed.length);
+        
+        setOngoingInstallation(ongoing || null);
+        setConnectedDevices(completed);
+      }
     } catch (error) {
       console.error('Error loading delegated keys:', error);
     } finally {
@@ -38,7 +114,8 @@ export default function SmartWatchScreen() {
 
   // Refresh the list when the screen comes into focus
   useFocusEffect(
-    React.useCallback(() => {
+    useCallback(() => {
+      console.log('[SmartWatch] Screen focused, reloading delegated keys...');
       loadDelegatedKeys();
     }, [])
   );
@@ -203,6 +280,124 @@ export default function SmartWatchScreen() {
     );
   };
 
+  const handleRevokeDevice = (device: DelegatedKeyData) => {
+    Alert.alert(
+      'Revoke Delegated Key',
+      `Are you sure you want to revoke the delegated key for "${device.deviceName}"?\n\nAddress: ${device.publicAddress}\n\nThis action cannot be undone and will permanently remove the key from the blockchain.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke',
+          style: 'destructive',
+          onPress: async () => {
+            setIsRevoking(true);
+            try {
+              console.log('Revoking delegated key for device:', device.deviceName);
+              
+              // Call server API to revoke the key on blockchain
+              const response = await apiClient.revokeKey(device.publicAddress);
+              
+              if (response.success) {
+                // Remove from local storage
+                await removeDelegatedKey(device.id);
+                await loadDelegatedKeys();
+                
+                Alert.alert(
+                  'Success', 
+                  `Delegated key "${device.deviceName}" revoked successfully!\n\nTransaction Hash: ${response.txHash}`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('Error', 'Failed to revoke delegated key');
+              }
+            } catch (error: any) {
+              console.error('Error revoking delegated key:', error);
+              const errorMessage = error?.message || 'Failed to revoke delegated key';
+              Alert.alert('Error', errorMessage);
+            } finally {
+              setIsRevoking(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleCopyAddress = (address: string) => {
+    Clipboard.setString(address);
+    Alert.alert('Copied', 'Delegated public key copied to clipboard');
+  };
+
+  const handleShowFullAddress = (address: string) => {
+    setSelectedAddress(address);
+    setShowAddressModal(true);
+  };
+
+  const formatShortAddress = (address: string) => {
+    if (address.length <= 10) return address;
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  };
+
+  const handleViewInstallation = (device: DelegatedKeyData) => {
+    router.push({
+      pathname: '/settings/smart-watch/installation-progress',
+      params: {
+        deviceId: device.id,
+        deviceName: device.deviceName,
+        keyType: device.keyType,
+      }
+    });
+  };
+
+  const handleRemoveStuckInstallations = () => {
+    Alert.alert(
+      'Remove Stuck Installations',
+      'This will remove all installations that are stuck in the "installing" state. Are you sure you want to proceed?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await removeStuckInstallations();
+              await loadDelegatedKeys();
+              Alert.alert('Success', 'Stuck installations removed successfully');
+            } catch (error) {
+              console.error('Error removing stuck installations:', error);
+              Alert.alert('Error', 'Failed to remove stuck installations');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleClearAllKeys = () => {
+    Alert.alert(
+      'Clear All Keys',
+      'This will remove ALL delegated keys from your device. This action cannot be undone. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearAllDelegatedKeys();
+              await loadDelegatedKeys();
+              Alert.alert('Success', 'All delegated keys cleared successfully');
+            } catch (error) {
+              console.error('Error clearing all keys:', error);
+              Alert.alert('Error', 'Failed to clear all keys');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+
   const handleRevokeAllKeys = () => {
     if (connectedDevices.length === 0) {
       Alert.alert('Info', 'No delegated keys to revoke');
@@ -271,6 +466,70 @@ export default function SmartWatchScreen() {
             <Text style={styles.createButtonText}>Create New Delegated Key</Text>
           </TouchableOpacity>
 
+          {/* Ongoing Installation */}
+          {ongoingInstallation && (
+            <View style={styles.ongoingInstallationCard}>
+              <View style={styles.ongoingHeader}>
+                <IconSymbol name="applewatch" size={24} color="#8B5CF6" />
+                <Text style={styles.ongoingTitle}>
+                  {globalInstallationState.status?.step === 'completed' ? 'Installation Complete' : 'Installing...'}
+                </Text>
+                <View style={styles.ongoingBadge}>
+                  <Text style={styles.ongoingBadgeText}>
+                    {globalInstallationState.status?.step === 'completed' ? 'COMPLETED' : 'IN PROGRESS'}
+                  </Text>
+                </View>
+              </View>
+              
+              <View style={styles.ongoingDetails}>
+                <Text style={styles.ongoingDeviceName}>{ongoingInstallation.deviceName}</Text>
+                <Text style={styles.ongoingKeyType}>
+                  {ongoingInstallation.keyType === 'sudo' ? 'Sudo Access' : 'Restricted Access'}
+                </Text>
+                
+                {ongoingInstallation.installationProgress ? (
+                  <View style={styles.ongoingProgress}>
+                    <View style={styles.ongoingProgressBar}>
+                      <View 
+                        style={[
+                          styles.ongoingProgressFill,
+                          { 
+                            width: `${globalInstallationState.progress}%` 
+                          }
+                        ]} 
+                      />
+                    </View>
+                    <Text style={styles.ongoingProgressText}>
+                      {globalInstallationState.currentStep}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.ongoingProgress}>
+                    <View style={styles.ongoingProgressBar}>
+                      <View 
+                        style={[
+                          styles.ongoingProgressFill,
+                          { width: '100%' }
+                        ]} 
+                      />
+                    </View>
+                    <Text style={styles.ongoingProgressText}>
+                      Installation Complete
+                    </Text>
+                  </View>
+                )}
+              </View>
+              
+              <TouchableOpacity
+                style={styles.viewInstallationButton}
+                onPress={() => handleViewInstallation(ongoingInstallation)}
+              >
+                <IconSymbol name="arrow.right" size={16} color="#8B5CF6" />
+                <Text style={styles.viewInstallationText}>View Progress</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Connected Devices */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Connected Devices</Text>
@@ -282,82 +541,57 @@ export default function SmartWatchScreen() {
             ) : connectedDevices.length > 0 ? (
               connectedDevices.map((device) => (
                 <View key={device.id} style={styles.deviceCard}>
-                  <View style={styles.deviceInfo}>
-                    <View style={styles.deviceHeader}>
-                      <IconSymbol name="applewatch" size={24} color="#8B5CF6" />
-                      <Text style={styles.deviceName}>{device.deviceName}</Text>
-                      <View style={[
-                        styles.statusBadge,
-                        { backgroundColor: getStatusColor(device.installationStatus) }
-                      ]}>
-                        <Text style={[
-                          styles.statusText,
-                          styles.statusTextConnected
-                        ]}>
-                          {getStatusText(device.installationStatus)}
-                        </Text>
+                  <View style={styles.deviceHeader}>
+                    <IconSymbol name="applewatch" size={24} color="#8B5CF6" />
+                    <Text style={styles.deviceName}>{device.deviceName}</Text>
+                  </View>
+                  
+                  <View style={styles.deviceDetails}>
+                    <View style={styles.addressSection}>
+                      <Text style={styles.detailLabel}>Public Delegated Address:</Text>
+                      <View style={styles.addressRow}>
+                        <Text style={styles.shortAddressText}>{formatShortAddress(device.publicAddress)}</Text>
+                        <TouchableOpacity
+                          style={styles.copyButton}
+                          onPress={() => handleCopyAddress(device.publicAddress)}
+                        >
+                          <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.viewFullButton}
+                          onPress={() => handleShowFullAddress(device.publicAddress)}
+                        >
+                          <IconSymbol name="eye" size={16} color="#8B5CF6" />
+                        </TouchableOpacity>
                       </View>
                     </View>
                     
-                    <View style={styles.deviceDetails}>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Key Type:</Text>
-                        <View style={[
-                          styles.keyTypeBadge,
-                          device.keyType === 'sudo' ? styles.sudoBadge : styles.restrictedBadge
-                        ]}>
-                          <Text style={[
-                            styles.keyTypeText,
-                            device.keyType === 'sudo' ? styles.sudoText : styles.restrictedText
-                          ]}>
-                            {device.keyType === 'sudo' ? 'Sudo Access' : 'Restricted Access'}
-                          </Text>
-                        </View>
-                      </View>
-                      
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Created:</Text>
-                        <Text style={styles.detailValue}>
-                          {new Date(device.createdAt).toLocaleDateString()}
-                        </Text>
-                      </View>
-                      
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Permission ID:</Text>
-                        <Text style={styles.detailValue}>
-                          {device.permissionId.slice(0, 10)}...
-                        </Text>
-                      </View>
-                      
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Public Address:</Text>
-                        <Text style={styles.detailValue}>
-                          {device.publicAddress.slice(0, 10)}...
-                        </Text>
-                      </View>
+                    <View style={styles.dateSection}>
+                      <Text style={styles.dateLabel}>Date:</Text>
+                      <Text style={styles.dateValue}>
+                        {new Date(device.createdAt).toLocaleDateString('en-US', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          year: 'numeric'
+                        })}
+                      </Text>
                     </View>
                   </View>
                   
                   <View style={styles.deviceActions}>
                     <TouchableOpacity
-                      style={styles.detailsButton}
-                      onPress={() => handleShowDeviceDetails(device)}
+                      style={styles.revokeButton}
+                      onPress={() => handleRevokeDevice(device)}
+                      disabled={isRevoking}
                     >
-                      <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
-                    </TouchableOpacity>
-                    {device.installationStatus === 'installing' && (
-                      <TouchableOpacity
-                        style={styles.installationDetailsButton}
-                        onPress={() => handleShowInstallationDetails(device)}
-                      >
-                        <IconSymbol name="clock" size={16} color="#F59E0B" />
-                      </TouchableOpacity>
-                    )}
-                    <TouchableOpacity
-                      style={styles.disconnectButton}
-                      onPress={() => handleDisconnectDevice(device.id)}
-                    >
-                      <IconSymbol name="xmark" size={16} color="#EF4444" />
+                      {isRevoking ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                      )}
+                      <Text style={styles.revokeButtonText}>
+                        {isRevoking ? 'Revoking...' : 'Revoke'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -430,6 +664,47 @@ export default function SmartWatchScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* Full Address Modal */}
+      <Modal
+        visible={showAddressModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowAddressModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Delegated Public Key</Text>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setShowAddressModal(false)}
+              >
+                <IconSymbol name="xmark" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.modalContent}>
+              <View style={styles.fullAddressContainer}>
+                <Text style={styles.fullAddressText}>{selectedAddress}</Text>
+              </View>
+              
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalCopyButton}
+                  onPress={() => {
+                    handleCopyAddress(selectedAddress);
+                    setShowAddressModal(false);
+                  }}
+                >
+                  <IconSymbol name="doc.on.doc.fill" size={20} color="#FFFFFF" />
+                  <Text style={styles.copyButtonText}>Copy Public Key</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Installation Details Modal */}
       <Modal
@@ -629,6 +904,31 @@ export default function SmartWatchScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Debug/Cleanup Section */}
+      {(ongoingInstallation || connectedDevices.length > 0) && (
+        <View style={styles.debugSection}>
+          <Text style={styles.debugSectionTitle}>Debug & Cleanup</Text>
+          
+          {ongoingInstallation && (
+            <TouchableOpacity
+              style={styles.debugButton}
+              onPress={handleRemoveStuckInstallations}
+            >
+              <IconSymbol name="trash" size={16} color="#EF4444" />
+              <Text style={styles.debugButtonText}>Remove Stuck Installations</Text>
+            </TouchableOpacity>
+          )}
+          
+          <TouchableOpacity
+            style={[styles.debugButton, styles.clearAllButton]}
+            onPress={handleClearAllKeys}
+          >
+            <IconSymbol name="trash.fill" size={16} color="#FFFFFF" />
+            <Text style={[styles.debugButtonText, styles.clearAllButtonText]}>Clear All Keys</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
     </>
   );
@@ -703,22 +1003,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#333333',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  deviceInfo: {
-    flex: 1,
   },
   deviceHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
     gap: 12,
   },
   deviceName: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: 'bold',
     color: '#FFFFFF',
     flex: 1,
   },
@@ -754,6 +1048,7 @@ const styles = StyleSheet.create({
   detailLabel: {
     fontSize: 14,
     color: '#A0A0A0',
+    fontWeight: '500',
   },
   detailValue: {
     fontSize: 14,
@@ -854,7 +1149,8 @@ const styles = StyleSheet.create({
   },
   deviceActions: {
     flexDirection: 'row',
-    gap: 8,
+    justifyContent: 'flex-end',
+    marginTop: 16,
   },
   detailsButton: {
     padding: 8,
@@ -872,12 +1168,20 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     backgroundColor: '#1A1A1A',
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: '#333333',
     width: '100%',
     maxWidth: 400,
     maxHeight: '80%',
+    shadowColor: '#000000',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 10,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -888,9 +1192,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#333333',
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
+    letterSpacing: 0.3,
   },
   closeButton: {
     padding: 4,
@@ -1094,5 +1399,228 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  addressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+    gap: 8,
+    flex: 1,
+  },
+  addressText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontFamily: 'monospace',
+  },
+  addressSection: {
+    marginBottom: 12,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  shortAddressText: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontFamily: 'monospace',
+  },
+  copyButton: {
+    padding: 6,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  viewFullButton: {
+    padding: 6,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  dateSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dateLabel: {
+    fontSize: 14,
+    color: '#A0A0A0',
+    fontWeight: '500',
+  },
+  dateValue: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  fullAddressContainer: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#333333',
+    marginBottom: 20,
+  },
+  fullAddressText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontFamily: 'monospace',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  modalCopyButton: {
+    backgroundColor: '#8B5CF6',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: '#8B5CF6',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#A78BFA',
+  },
+  copyButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  ongoingInstallationCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#8B5CF6',
+  },
+  ongoingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 12,
+  },
+  ongoingTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  ongoingBadge: {
+    backgroundColor: '#8B5CF6',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  ongoingBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  ongoingDetails: {
+    marginBottom: 16,
+  },
+  ongoingDeviceName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  ongoingKeyType: {
+    fontSize: 14,
+    color: '#8B5CF6',
+    marginBottom: 12,
+  },
+  ongoingProgress: {
+    gap: 8,
+  },
+  ongoingProgressBar: {
+    height: 6,
+    backgroundColor: '#333333',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  ongoingProgressFill: {
+    height: '100%',
+    backgroundColor: '#8B5CF6',
+    borderRadius: 3,
+  },
+  ongoingProgressText: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    fontWeight: '500',
+  },
+  viewInstallationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#2A1A2A',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#8B5CF6',
+  },
+  viewInstallationText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8B5CF6',
+  },
+  debugSection: {
+    margin: 16,
+    padding: 16,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  debugSectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 12,
+  },
+  debugButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2A1A1A',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#EF4444',
+    marginBottom: 8,
+  },
+  debugButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+  clearAllButton: {
+    backgroundColor: '#EF4444',
+    borderColor: '#EF4444',
+  },
+  clearAllButtonText: {
+    color: '#FFFFFF',
   },
 });
