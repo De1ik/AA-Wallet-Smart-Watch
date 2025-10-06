@@ -8,11 +8,13 @@ import {
   sendUserOpV07, 
   UnpackedUserOperationV07,
   buildInstallPermissionUO,
+  buildInstallCallPolicyUO,
   buildEnableSelectorUO,
   buildGrantAccessUO,
   buildUninstallPermissionUO,
   getRootCurrentNonce,
-  checkPrefund
+  checkPrefund,
+  CallPolicyPermission
 } from "../utils/native-code";
 import { parseEther } from 'viem';
 import { InstallationStatus } from "../services/websocket";
@@ -305,6 +307,125 @@ router.get("/gas/prices", async (_req: Request, res: Response) => {
 });
 
 /**
+ * Install CallPolicy with custom restrictions for delegated key
+ * Body:
+ * {
+ *   "delegatedEOA": "0x...",  // string (required) - delegated EOA address
+ *   "permissions": [          // array (required) - CallPolicy permissions
+ *     {
+ *       "callType": 0,        // number (required) - 0 = CALLTYPE_SINGLE, 1 = CALLTYPE_DELEGATECALL
+ *       "target": "0x...",   // string (required) - target contract address
+ *       "selector": "0x...", // string (required) - function selector
+ *       "valueLimit": "0",   // string (required) - maximum value in wei
+ *       "rules": [           // array (optional) - parameter rules
+ *         {
+ *           "condition": 0,  // number (required) - ParamCondition enum
+ *           "offset": 0,     // number (required) - parameter offset
+ *           "params": ["0x..."] // array (required) - rule parameters
+ *         }
+ *       ]
+ *     }
+ *   ]
+ * }
+ * Response:
+ * {
+ *   "permissionId": "0x...",
+ *   "vId": "0x...",
+ *   "txHash": "0x..."
+ * }
+ */
+router.post("/delegated/install-callpolicy", async (req: Request, res: Response) => {
+  try {
+    console.log('[delegated/install-callpolicy] -> req.body:', req.body);
+    
+    const { delegatedEOA, permissions } = req.body ?? {};
+    
+    if (!delegatedEOA || typeof delegatedEOA !== "string") {
+      return res.status(400).json({ 
+        error: "delegatedEOA is required and must be a valid Ethereum address string" 
+      });
+    }
+    
+    if (!delegatedEOA.startsWith('0x') || delegatedEOA.length !== 42) {
+      return res.status(400).json({ 
+        error: "delegatedEOA must be a valid Ethereum address (0x + 40 hex chars)" 
+      });
+    }
+    
+    if (!permissions || !Array.isArray(permissions) || permissions.length === 0) {
+      return res.status(400).json({ 
+        error: "permissions is required and must be a non-empty array of CallPolicy permissions" 
+      });
+    }
+    
+    // Validate permissions structure
+    for (let i = 0; i < permissions.length; i++) {
+      const perm = permissions[i];
+      if (!perm.callType || typeof perm.callType !== "number") {
+        return res.status(400).json({ 
+          error: `permissions[${i}].callType is required and must be a number (0 or 1)` 
+        });
+      }
+      if (!perm.target || typeof perm.target !== "string") {
+        return res.status(400).json({ 
+          error: `permissions[${i}].target is required and must be a valid Ethereum address` 
+        });
+      }
+      if (!perm.selector || typeof perm.selector !== "string") {
+        return res.status(400).json({ 
+          error: `permissions[${i}].selector is required and must be a 4-byte hex string` 
+        });
+      }
+      if (perm.valueLimit === undefined || perm.valueLimit === null) {
+        return res.status(400).json({ 
+          error: `permissions[${i}].valueLimit is required and must be a string or number` 
+        });
+      }
+    }
+    
+    // Convert permissions to the expected format (convert ETH to wei)
+    const callPolicyPermissions: CallPolicyPermission[] = permissions.map(perm => {
+      const ethValue = parseFloat(perm.valueLimit.toString());
+      const weiValue = Math.floor(ethValue * 1e18);
+      return {
+        callType: perm.callType,
+        target: perm.target as `0x${string}`,
+        selector: (perm.selector === '0x' ? '0x00000000' : perm.selector) as `0x${string}`,
+        valueLimit: BigInt(weiValue), // Convert ETH to wei
+        rules: (perm.rules || []).map((rule: any) => ({
+          condition: rule.condition,
+          offset: rule.offset,
+          params: rule.params || []
+        }))
+      };
+    });
+    
+    console.log('[delegated/install-callpolicy] -> Building install CallPolicy UO for:', delegatedEOA);
+    const { unpacked: installUO, permissionId, vId } = await buildInstallCallPolicyUO(
+      delegatedEOA as `0x${string}`, 
+      callPolicyPermissions
+    );
+    
+    console.log('[delegated/install-callpolicy] -> Sending user operation...');
+    const txHash = await sendUserOpV07(installUO);
+    
+    console.log('[delegated/install-callpolicy] -> Success! permissionId:', permissionId, 'vId:', vId, 'txHash:', txHash);
+    
+    return res.json({
+      permissionId,
+      vId,
+      txHash
+    });
+  } catch (err: any) {
+    console.error("[/delegated/install-callpolicy] error:", err);
+    return res.status(500).json({ 
+      error: "Failed to install CallPolicy permission validation",
+      details: err?.message ?? "internal error" 
+    });
+  }
+});
+
+/**
  * Install permission validation for delegated key
  * Body:
  * {
@@ -512,8 +633,9 @@ router.post("/delegated/uninstall", async (req: Request, res: Response) => {
  * Body:
  * {
  *   "delegatedEOA": "0x...",  // string (required) - delegated EOA address
- *   "keyType": "sudo" | "restricted", // string (required)
- *   "clientId": "unique_id"   // string (optional) - for WebSocket updates
+ *   "keyType": "sudo" | "restricted" | "callpolicy", // string (required)
+ *   "clientId": "unique_id",   // string (optional) - for WebSocket updates
+ *   "permissions": [...]       // array (required for callpolicy) - CallPolicy permissions
  * }
  * Response:
  * {
@@ -526,7 +648,7 @@ router.post("/delegated/create", async (req: Request, res: Response) => {
   try {
     console.log('[delegated/create] -> req.body:', req.body);
     
-    const { delegatedEOA, keyType, clientId } = req.body ?? {};
+    const { delegatedEOA, keyType, clientId, permissions } = req.body ?? {};
     
     // Validation
     if (!delegatedEOA || typeof delegatedEOA !== "string") {
@@ -541,10 +663,19 @@ router.post("/delegated/create", async (req: Request, res: Response) => {
       });
     }
 
-    if (!keyType || !['sudo', 'restricted'].includes(keyType)) {
+    if (!keyType || !['sudo', 'restricted', 'callpolicy'].includes(keyType)) {
       return res.status(400).json({ 
-        error: "keyType is required and must be either 'sudo' or 'restricted'" 
+        error: "keyType is required and must be either 'sudo', 'restricted', or 'callpolicy'" 
       });
+    }
+    
+    // For callpolicy, validate permissions
+    if (keyType === 'callpolicy') {
+      if (!permissions || !Array.isArray(permissions) || permissions.length === 0) {
+        return res.status(400).json({ 
+          error: "permissions is required for callpolicy keyType and must be a non-empty array" 
+        });
+      }
     }
 
     // Generate unique installation ID
@@ -571,7 +702,7 @@ router.post("/delegated/create", async (req: Request, res: Response) => {
     }
     
     // Start the installation process asynchronously
-    performDelegatedKeyInstallation(installationId, delegatedEOA, keyType, clientId);
+    performDelegatedKeyInstallation(installationId, delegatedEOA, keyType, clientId, permissions);
     
     return res.json({
       success: true,
@@ -591,8 +722,9 @@ router.post("/delegated/create", async (req: Request, res: Response) => {
 async function performDelegatedKeyInstallation(
   installationId: string, 
   delegatedEOA: string, 
-  keyType: 'sudo' | 'restricted',
-  clientId?: string
+  keyType: 'sudo' | 'restricted' | 'callpolicy',
+  clientId?: string,
+  permissions?: any[]
 ) {
   const sendStatus = (status: InstallationStatus) => {
     console.log(`[Installation ${installationId}] Status:`, status);
@@ -611,8 +743,41 @@ async function performDelegatedKeyInstallation(
       progress: 10
     });
 
-    const { unpacked: installUO, permissionId, vId } = await buildInstallPermissionUO(delegatedEOA as `0x${string}`);
-    const installTxHash = await sendUserOpV07(installUO);
+    let installTxHash: string;
+    let permissionId: string;
+    let vId: string;
+    
+    if (keyType === 'callpolicy') {
+    // Convert permissions to the expected format (convert ETH to wei)
+    const callPolicyPermissions: CallPolicyPermission[] = permissions!.map(perm => {
+      const ethValue = parseFloat(perm.valueLimit.toString());
+      const weiValue = Math.floor(ethValue * 1e18);
+      return {
+        callType: perm.callType,
+        target: perm.target as `0x${string}`,
+        selector: (perm.selector === '0x' ? '0x00000000' : perm.selector) as `0x${string}`,
+        valueLimit: BigInt(weiValue), // Convert ETH to wei
+        rules: (perm.rules || []).map((rule: any) => ({
+          condition: rule.condition,
+          offset: rule.offset,
+          params: rule.params || []
+        }))
+      };
+    });
+      
+      const { unpacked: installUO, permissionId: permId, vId: vid } = await buildInstallCallPolicyUO(
+        delegatedEOA as `0x${string}`, 
+        callPolicyPermissions
+      );
+      installTxHash = await sendUserOpV07(installUO);
+      permissionId = permId;
+      vId = vid;
+    } else {
+      const { unpacked: installUO, permissionId: permId, vId: vid } = await buildInstallPermissionUO(delegatedEOA as `0x${string}`);
+      installTxHash = await sendUserOpV07(installUO);
+      permissionId = permId;
+      vId = vid;
+    }
     
     console.log(`[Installation ${installationId}] Install tx:`, installTxHash);
     
@@ -637,6 +802,16 @@ async function performDelegatedKeyInstallation(
 
     if (keyType === 'sudo') {
       // For sudo: just grant access
+      const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
+      grantTxHash = await sendUserOpV07(grantUO);
+    } else if (keyType === 'callpolicy') {
+      // For CallPolicy: still need to grant access to execute selector
+      sendStatus({
+        step: 'granting',
+        message: 'Granting access to execute selector for CallPolicy...',
+        progress: 70
+      });
+      
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
       grantTxHash = await sendUserOpV07(grantUO);
     } else {
@@ -678,9 +853,10 @@ async function performDelegatedKeyInstallation(
     await waitForNonceUpdate(installationId, sendStatus, 95);
 
     // Step 3: Completed
+    const keyTypeDisplay = keyType === 'sudo' ? 'Sudo' : keyType === 'restricted' ? 'Restricted' : 'CallPolicy';
     sendStatus({
       step: 'completed',
-      message: `${keyType === 'sudo' ? 'Sudo' : 'Restricted'} delegated key created successfully!`,
+      message: `${keyTypeDisplay} delegated key created successfully!`,
       progress: 100
     });
 

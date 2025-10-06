@@ -6,7 +6,7 @@ import { router, Stack } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { apiClient, InstallationStatus } from '@/utils/apiClient';
 import { wsClient } from '@/utils/websocketClient';
-import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey } from '@/utils/delegatedKeys';
+import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey, CallPolicyPermission, CallPolicyParamRule, CallPolicyParamCondition, PredefinedAction, CallPolicySettings } from '@/utils/delegatedKeys';
 import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData } from '@/utils/smartWatchBridge';
 import { getKernelAddress } from '@/utils/config';
@@ -45,13 +45,41 @@ export default function CreateDelegatedKeyScreen() {
   const [newTokenSymbol, setNewTokenSymbol] = useState('');
   const [newTokenMaxDay, setNewTokenMaxDay] = useState('');
   const [newTokenMaxTx, setNewTokenMaxTx] = useState('');
+  
+  // CallPolicy settings
+  const [showCallPolicySettings, setShowCallPolicySettings] = useState(false);
+  const [callPolicySettings, setCallPolicySettings] = useState<CallPolicySettings>({
+    allowedTargets: [],
+    allowedActions: [],
+    maxValuePerTx: '0.1',
+    maxValuePerDay: '1.0'
+  });
+  const [newTargetAddress, setNewTargetAddress] = useState('');
+  const [showAddTarget, setShowAddTarget] = useState(false);
+  
+  // Predefined actions
+  const predefinedActions: PredefinedAction[] = [
+    { id: 'transfer', name: 'Transfer', description: 'Send tokens to any address', selector: '0xa9059cbb', category: 'transfer' },
+    { id: 'approve', name: 'Approve', description: 'Approve token spending', selector: '0x095ea7b3', category: 'approve' },
+    { id: 'transferFrom', name: 'Transfer From', description: 'Transfer tokens on behalf of another', selector: '0x23b872dd', category: 'transfer' },
+    { id: 'swap', name: 'Swap', description: 'Exchange tokens via DEX', selector: '0x38ed1739', category: 'swap' },
+    { id: 'stake', name: 'Stake', description: 'Stake tokens for rewards', selector: '0xa694fc3a', category: 'stake' },
+    { id: 'unstake', name: 'Unstake', description: 'Unstake tokens', selector: '0x2e17de78', category: 'stake' },
+    { id: 'claim', name: 'Claim Rewards', description: 'Claim staking rewards', selector: '0x379607f5', category: 'stake' },
+    { id: 'deposit', name: 'Deposit', description: 'Deposit tokens to protocol', selector: '0x47e7ef24', category: 'other' },
+    { id: 'withdraw', name: 'Withdraw', description: 'Withdraw tokens from protocol', selector: '0x2e1a7d4d', category: 'other' }
+  ];
 
   const handleKeyTypeSelect = (type: KeyType) => {
     if (type === 'sudo') {
       setShowSudoWarning(true);
     } else {
       setKeyType(type);
-      setShowRestrictedSettings(true);
+      if (type === 'restricted') {
+        setShowRestrictedSettings(true);
+      } else if (type === 'callpolicy') {
+        setShowCallPolicySettings(true);
+      }
     }
   };
 
@@ -141,6 +169,67 @@ export default function CreateDelegatedKeyScreen() {
     setTokenLimits(prev => prev.filter((_, i) => i !== index));
   };
 
+  // CallPolicy functions
+  const addTargetAddress = () => {
+    if (newTargetAddress && newTargetAddress.startsWith('0x') && newTargetAddress.length === 42) {
+      setCallPolicySettings(prev => ({
+        ...prev,
+        allowedTargets: [...prev.allowedTargets, newTargetAddress]
+      }));
+      setNewTargetAddress('');
+      setShowAddTarget(false);
+    } else {
+      Alert.alert('Error', 'Please enter a valid Ethereum address (0x...)');
+    }
+  };
+
+  const removeTargetAddress = (index: number) => {
+    setCallPolicySettings(prev => ({
+      ...prev,
+      allowedTargets: prev.allowedTargets.filter((_, i) => i !== index)
+    }));
+  };
+
+  const toggleAction = (actionId: string) => {
+    setCallPolicySettings(prev => ({
+      ...prev,
+      allowedActions: prev.allowedActions.includes(actionId)
+        ? prev.allowedActions.filter(id => id !== actionId)
+        : [...prev.allowedActions, actionId]
+    }));
+  };
+
+  const generateCallPolicyPermissions = (): CallPolicyPermission[] => {
+    const permissions: CallPolicyPermission[] = [];
+    
+    // Create permissions for each allowed target and action combination
+    callPolicySettings.allowedTargets.forEach(target => {
+      callPolicySettings.allowedActions.forEach(actionId => {
+        const action = predefinedActions.find(a => a.id === actionId);
+        if (action) {
+          permissions.push({
+            callType: 0, // Always CALL for user-friendly interface
+            target,
+            selector: action.selector,
+            valueLimit: callPolicySettings.maxValuePerTx,
+            rules: []
+          });
+        }
+      });
+      
+      // Always add ETH transfer permission (using zero selector for ETH transfers)
+      permissions.push({
+        callType: 0, // Always CALL for user-friendly interface
+        target,
+        selector: '0x00000000', // 4-byte zero selector for ETH transfers
+        valueLimit: callPolicySettings.maxValuePerTx,
+        rules: []
+      });
+    });
+    
+    return permissions;
+  };
+
   const handleCancelOperation = () => {
     setIsAborting(true);
     setIsConnecting(false);
@@ -183,11 +272,18 @@ export default function CreateDelegatedKeyScreen() {
 
       // Start the installation process
       const clientId = wsClient.getClientId();
-      const result = await apiClient.createDelegatedKey({
+      const requestData: any = {
         delegatedEOA,
         keyType,
         clientId
-      });
+      };
+      
+      // Add permissions for CallPolicy
+      if (keyType === 'callpolicy') {
+        requestData.permissions = generateCallPolicyPermissions();
+      }
+      
+      const result = await apiClient.createDelegatedKey(requestData);
 
       console.log('Installation started:', result);
 
@@ -219,6 +315,9 @@ export default function CreateDelegatedKeyScreen() {
           whitelistAddresses: allowEveryone ? [] : whitelistAddresses,
           tokenLimits,
           allowEveryone
+        }),
+        ...(keyType === 'callpolicy' && {
+          callPolicyPermissions: generateCallPolicyPermissions()
         })
       };
 
@@ -236,9 +335,10 @@ export default function CreateDelegatedKeyScreen() {
       await syncPermissionData(watchPermissionData);
       console.log('Permission data synced to smart watch successfully!');
       
+      const keyTypeDisplay = keyType === 'sudo' ? 'Sudo Access' : keyType === 'restricted' ? 'Restricted Access' : 'CallPolicy Access';
       Alert.alert(
         'Success!',
-        `Delegated key created successfully for ${deviceName}.\n\nKey Type: ${keyType === 'sudo' ? 'Sudo Access' : 'Restricted Access'}\nPublic Key: ${keyPair.address.slice(0, 10)}...\n\nYour smart watch can now perform transactions on your behalf.`,
+        `Delegated key created successfully for ${deviceName}.\n\nKey Type: ${keyTypeDisplay}\nPublic Key: ${keyPair.address.slice(0, 10)}...\n\nYour smart watch can now perform transactions on your behalf.`,
         [
           {
             text: 'OK',
@@ -560,8 +660,173 @@ export default function CreateDelegatedKeyScreen() {
                     </Text>
                   </View>
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.keyTypeOption,
+                    keyType === 'callpolicy' && styles.keyTypeOptionSelected,
+                    !isWatchConnected && styles.keyTypeOptionDisabled
+                  ]}
+                  onPress={() => isWatchConnected && handleKeyTypeSelect('callpolicy')}
+                  disabled={!isWatchConnected}
+                >
+                  <View style={styles.keyTypeHeader}>
+                    <IconSymbol 
+                      name="gear.circle.fill" 
+                      size={24} 
+                      color={keyType === 'callpolicy' ? '#8B5CF6' : '#A0A0A0'} 
+                    />
+                    <Text style={[
+                      styles.keyTypeTitle,
+                      keyType === 'callpolicy' && styles.keyTypeTitleSelected
+                    ]}>
+                      CallPolicy Access
+                    </Text>
+                  </View>
+                  <Text style={styles.keyTypeDescription}>
+                    Custom permissions with specific function and parameter restrictions
+                  </Text>
+                  <View style={[
+                    styles.advancedBadge,
+                    keyType === 'callpolicy' && styles.advancedBadgeSelected
+                  ]}>
+                    <Text style={[
+                      styles.advancedText,
+                      keyType === 'callpolicy' && styles.advancedTextSelected
+                    ]}>
+                      Advanced
+                    </Text>
+                  </View>
+                </TouchableOpacity>
               </View>
             </View>
+
+            {/* CallPolicy Settings */}
+            {keyType === 'callpolicy' && isWatchConnected && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>CallPolicy Settings</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Configure allowed targets, actions, and spending limits
+                </Text>
+                
+                {/* Allowed Target Addresses */}
+                <View style={styles.subsection}>
+                  <Text style={styles.subsectionTitle}>Allowed Target Addresses</Text>
+                  <Text style={styles.subsectionDescription}>
+                    Smart contracts your watch can interact with
+                  </Text>
+                  
+                  {callPolicySettings.allowedTargets.length > 0 && (
+                    <View style={styles.targetList}>
+                      {callPolicySettings.allowedTargets.map((target, index) => (
+                        <View key={index} style={styles.targetItem}>
+                          <Text style={styles.targetAddress}>{target}</Text>
+                          <TouchableOpacity
+                            onPress={() => removeTargetAddress(index)}
+                            style={styles.removeButton}
+                          >
+                            <IconSymbol name="trash" size={16} color="#EF4444" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  
+                  <TouchableOpacity
+                    onPress={() => setShowAddTarget(true)}
+                    style={styles.addTargetButton}
+                  >
+                    <IconSymbol name="plus" size={16} color="#10B981" />
+                    <Text style={styles.addTargetText}>Add Target Address</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Allowed Actions */}
+                <View style={styles.subsection}>
+                  <Text style={styles.subsectionTitle}>Allowed Actions</Text>
+                  <Text style={styles.subsectionDescription}>
+                    Select the actions your watch can perform
+                  </Text>
+                  
+                  <View style={styles.actionsGrid}>
+                    {predefinedActions.map((action) => (
+                      <TouchableOpacity
+                        key={action.id}
+                        style={[
+                          styles.actionItem,
+                          callPolicySettings.allowedActions.includes(action.id) && styles.actionItemSelected
+                        ]}
+                        onPress={() => toggleAction(action.id)}
+                      >
+                        <View style={styles.actionHeader}>
+                          <Text style={[
+                            styles.actionName,
+                            callPolicySettings.allowedActions.includes(action.id) && styles.actionNameSelected
+                          ]}>
+                            {action.name}
+                          </Text>
+                          <View style={[
+                            styles.actionBadge,
+                            action.category === 'transfer' && styles.transferBadge,
+                            action.category === 'approve' && styles.approveBadge,
+                            action.category === 'swap' && styles.swapBadge,
+                            action.category === 'stake' && styles.stakeBadge,
+                            action.category === 'other' && styles.otherBadge
+                          ]}>
+                            <Text style={styles.actionBadgeText}>{action.category}</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.actionDescription}>{action.description}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                {/* Spending Limits */}
+                <View style={styles.subsection}>
+                  <Text style={styles.subsectionTitle}>Spending Limits</Text>
+                  <Text style={styles.subsectionDescription}>
+                    Set maximum transaction and daily limits
+                  </Text>
+                  
+                  <View style={styles.limitsContainer}>
+                    <View style={styles.limitItem}>
+                      <Text style={styles.limitLabel}>Max per Transaction (ETH)</Text>
+                      <TextInput
+                        style={styles.limitInput}
+                        value={callPolicySettings.maxValuePerTx}
+                        onChangeText={(text) => setCallPolicySettings(prev => ({ ...prev, maxValuePerTx: text }))}
+                        placeholder="0.1"
+                        placeholderTextColor="#666666"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    
+                    <View style={styles.limitItem}>
+                      <Text style={styles.limitLabel}>Max per Day (ETH)</Text>
+                      <TextInput
+                        style={styles.limitInput}
+                        value={callPolicySettings.maxValuePerDay}
+                        onChangeText={(text) => setCallPolicySettings(prev => ({ ...prev, maxValuePerDay: text }))}
+                        placeholder="1.0"
+                        placeholderTextColor="#666666"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                {/* Summary */}
+                {callPolicySettings.allowedTargets.length > 0 && callPolicySettings.allowedActions.length > 0 && (
+                  <View style={styles.summaryContainer}>
+                    <Text style={styles.summaryTitle}>Permission Summary</Text>
+                    <Text style={styles.summaryText}>
+                      Your watch can perform {callPolicySettings.allowedActions.length} action(s) on {callPolicySettings.allowedTargets.length} contract(s) with a maximum of {callPolicySettings.maxValuePerTx} ETH per transaction.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Restricted Settings */}
             {keyType === 'restricted' && isWatchConnected && (
@@ -773,6 +1038,69 @@ export default function CreateDelegatedKeyScreen() {
                   onPress={handleSudoWarningConfirm}
                 >
                   <Text style={styles.warningButtonPrimaryText}>I Understand</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Add Target Address Modal */}
+        <Modal
+          visible={showAddTarget}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowAddTarget(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.targetModal}>
+              <View style={styles.targetModalHeader}>
+                <Text style={styles.targetModalTitle}>Add Target Address</Text>
+                <TouchableOpacity
+                  onPress={() => setShowAddTarget(false)}
+                  style={styles.closeButton}
+                >
+                  <IconSymbol name="xmark" size={20} color="#A0A0A0" />
+                </TouchableOpacity>
+              </View>
+              
+              <View style={styles.targetModalContent}>
+                <Text style={styles.targetModalDescription}>
+                  Enter the smart contract address your watch will be allowed to interact with.
+                </Text>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Contract Address</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={newTargetAddress}
+                    onChangeText={setNewTargetAddress}
+                    placeholder="0x..."
+                    placeholderTextColor="#666666"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+                
+                <View style={styles.targetModalNote}>
+                  <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
+                  <Text style={styles.targetModalNoteText}>
+                    Make sure the address is a valid smart contract on the network you're using.
+                  </Text>
+                </View>
+              </View>
+              
+              <View style={styles.targetModalButtons}>
+                <TouchableOpacity
+                  style={styles.targetButtonSecondary}
+                  onPress={() => setShowAddTarget(false)}
+                >
+                  <Text style={styles.targetButtonSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.targetButtonPrimary}
+                  onPress={addTargetAddress}
+                >
+                  <Text style={styles.targetButtonPrimaryText}>Add Address</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1564,5 +1892,280 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#EF4444',
+  },
+  
+  // CallPolicy Styles
+  advancedBadge: {
+    backgroundColor: '#1A0A2E',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#8B5CF6',
+  },
+  advancedBadgeSelected: {
+    backgroundColor: '#8B5CF6',
+  },
+  advancedText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#8B5CF6',
+  },
+  advancedTextSelected: {
+    color: '#FFFFFF',
+  },
+  
+  // Target Address Styles
+  targetList: {
+    marginTop: 12,
+  },
+  targetItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  targetAddress: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontFamily: 'monospace',
+    flex: 1,
+  },
+  addTargetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#0F1A0F',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#10B981',
+    marginTop: 12,
+  },
+  addTargetText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#10B981',
+  },
+  
+  // Actions Grid Styles
+  actionsGrid: {
+    marginTop: 12,
+  },
+  actionItem: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  actionItemSelected: {
+    backgroundColor: '#0F1A0F',
+    borderColor: '#10B981',
+  },
+  actionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  actionName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  actionNameSelected: {
+    color: '#10B981',
+  },
+  actionBadge: {
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  transferBadge: {
+    backgroundColor: '#1A0A2E',
+  },
+  approveBadge: {
+    backgroundColor: '#1A2E0A',
+  },
+  swapBadge: {
+    backgroundColor: '#2E1A0A',
+  },
+  stakeBadge: {
+    backgroundColor: '#0A1A2E',
+  },
+  otherBadge: {
+    backgroundColor: '#2E2E2E',
+  },
+  actionBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  actionDescription: {
+    fontSize: 12,
+    color: '#A0A0A0',
+  },
+  
+  // Limits Styles
+  limitsContainer: {
+    marginTop: 12,
+  },
+  limitItem: {
+    marginBottom: 16,
+  },
+  limitLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+  limitInput: {
+    backgroundColor: '#0F0F0F',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    fontSize: 14,
+    color: '#FFFFFF',
+  },
+  
+  // Summary Styles
+  summaryContainer: {
+    backgroundColor: '#0F1A0F',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  summaryTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#10B981',
+    marginBottom: 4,
+  },
+  summaryText: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    lineHeight: 16,
+  },
+  
+  // Target Modal Styles
+  targetModal: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    margin: 20,
+    maxHeight: '60%',
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  targetModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333333',
+  },
+  targetModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  targetModalContent: {
+    padding: 20,
+  },
+  targetModalDescription: {
+    fontSize: 14,
+    color: '#A0A0A0',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  targetModalNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#1A0A2E',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#8B5CF6',
+  },
+  targetModalNoteText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#A0A0A0',
+    lineHeight: 16,
+  },
+  targetModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#333333',
+  },
+  targetButtonSecondary: {
+    flex: 1,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    alignItems: 'center',
+  },
+  targetButtonSecondaryText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#A0A0A0',
+  },
+  targetButtonPrimary: {
+    flex: 1,
+    backgroundColor: '#10B981',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  targetButtonPrimaryText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  
+  // Missing styles
+  subsectionDescription: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    marginBottom: 12,
+    lineHeight: 16,
+  },
+  closeButton: {
+    padding: 4,
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+  textInput: {
+    backgroundColor: '#0F0F0F',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    fontSize: 14,
+    color: '#FFFFFF',
   },
 });

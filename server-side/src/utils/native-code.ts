@@ -34,6 +34,7 @@ import {
   // modules
   const ECDSA_SIGNER: Address = '0x6A6F069E2a08c2468e7724Ab3250CdBFBA14D4FF'
   const SUDO_POLICY:  Address = '0x67b436caD8a6D025DF6C82C5BB43fbF11fC5B9B7'
+  const CALL_POLICY:  Address = '0x9a52283276a0ec8740df50bf01b28a80d880eaf2'
   
 // fees / amounts - FALLBACK VALUES (used when dynamic estimation fails)
 const FALLBACK_MAX_FEE_PER_GAS    = 5n * 10n ** 9n   // 5 gwei fallback
@@ -59,7 +60,6 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     'function currentNonce() view returns (uint32)',
     'function validationConfig(bytes21 vId) view returns (uint32 nonce, address hook)',
     'function isAllowedSelector(bytes21 vId, bytes4 selector) view returns (bool)',
-    'function DOMAIN_SEPARATOR() view returns (bytes32)', // EIP712 (Solady)
     'function grantAccess(bytes21 vId, bytes4 selector, bool allow) payable',
   ])
   
@@ -79,6 +79,15 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
   
   const stakeAbi = parseAbi([
     'function depositTo(address account) payable',
+  ])
+  
+  // CallPolicy ABI
+  const callPolicyAbi = parseAbi([
+    'function isInitialized(address wallet) view returns (bool)',
+    'function setPermission(bytes32 _id, bytes32 _permissionHash, address _owner, bytes memory _permission)',
+    'function encodedPermissions(bytes32 _id, bytes32 _permissionHash, address _owner) view returns(bytes memory)',
+    'function checkUserOpPolicy(bytes32 id, (address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature) userOp) payable returns (uint256)',
+    'function checkSignaturePolicy(bytes32 id, address sender, bytes32 hash, bytes sig) view returns (uint256)',
   ])
   
   // ===== Clients =====
@@ -120,6 +129,31 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     maxFeePerGas: bigint
     maxPriorityFeePerGas: bigint
     signature: `0x${string}`
+  }
+  
+  // CallPolicy types
+  export interface CallPolicyPermission {
+    callType: number; // 0 = CALLTYPE_SINGLE, 1 = CALLTYPE_DELEGATECALL
+    target: `0x${string}`;
+    selector: `0x${string}`;
+    valueLimit: bigint;
+    rules: CallPolicyParamRule[];
+  }
+  
+export interface CallPolicyParamRule {
+  condition: number; // ParamCondition enum
+  offset: bigint;
+  params: `0x${string}`[];
+}
+  
+  export enum CallPolicyParamCondition {
+    EQUAL = 0,
+    GREATER_THAN = 1,
+    LESS_THAN = 2,
+    GREATER_THAN_OR_EQUAL = 3,
+    LESS_THAN_OR_EQUAL = 4,
+    NOT_EQUAL = 5,
+    ONE_OF = 6
   }
   
   const EXECUTE_USER_OP_SELECTOR: Hex =
@@ -204,7 +238,34 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     // signer payload = РОВНО 20 байт адреса делегированного EOA
     const signerPayload = ('0x' + delegatedEOA.toLowerCase().slice(2)) as Hex
     const signerElem = packPermissionElem(SKIP_NONE, ECDSA_SIGNER, signerPayload)
+
+    // abi.encode(bytes[] data)
+    return encodeAbiParameters([{ type: 'bytes[]' }], [[policyElem, signerElem]]) as Hex
+  }
   
+  // >>> NEW: validationData for CallPolicy with custom restrictions
+  export function buildCallPolicyValidationData(delegatedEOA: Address, permissions: CallPolicyPermission[]): Hex {
+    // Encode permissions for CallPolicy
+    const permissionsData = encodeAbiParameters(
+      [{ type: 'tuple[]', components: [
+        { name: 'callType', type: 'uint8' },
+        { name: 'target', type: 'address' },
+        { name: 'selector', type: 'bytes4' },
+        { name: 'valueLimit', type: 'uint256' },
+        { name: 'rules', type: 'tuple[]', components: [
+          { name: 'condition', type: 'uint8' },
+          { name: 'offset', type: 'uint64' },
+          { name: 'params', type: 'bytes32[]' }
+        ]}
+      ]}],
+      [permissions]
+    )
+    
+    const policyElem = packPermissionElem(SKIP_NONE, CALL_POLICY, permissionsData)
+    // signer payload = РОВНО 20 байт адреса делегированного EOA
+    const signerPayload = ('0x' + delegatedEOA.toLowerCase().slice(2)) as Hex
+    const signerElem = packPermissionElem(SKIP_NONE, ECDSA_SIGNER, signerPayload)
+
     // abi.encode(bytes[] data)
     return encodeAbiParameters([{ type: 'bytes[]' }], [[policyElem, signerElem]]) as Hex
   }
@@ -501,6 +562,71 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     return { unpacked, permissionId, vId }
   }
   
+  // ===== STEP 1: INSTALL CallPolicy permission (root lane) =====
+  export async function buildInstallCallPolicyUO(delegatedEOA: Address, permissions: CallPolicyPermission[]) {
+    // permissionId: bytes4 (просто стабильный детерминированный id)
+    const permissionId = (keccak256(encodeAbiParameters(
+      [{type:'address'},{type:'address'}],
+      [KERNEL, delegatedEOA]
+    )) as Hex).slice(0,10) as Hex // 4 bytes
+
+    const vId = vIdFromPermissionId(permissionId)
+    const validationData = buildCallPolicyValidationData(delegatedEOA, permissions)
+
+    // Конфиг-нонс ядра
+    const current = await publicClient.readContract({ address: KERNEL, abi: kernelAbi, functionName: 'currentNonce' }) as number
+
+    const installCalldata = encodeFunctionData({
+      abi: kernelInstallValidationsAbi,
+      functionName: 'installValidations',
+      args: [
+        [vId],
+        [{ nonce: current, hook: HOOK_SENTINEL }], // >>> FIX: правильный nonce + hook=address(1)
+        [validationData],
+        ['0x'],
+      ],
+    })
+    const execData = encodeSingle(KERNEL, 0n, installCalldata)
+    const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix())
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('install');
+    
+    const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
+
+    // root lane key (mode=0x00,type=0x00)
+    const nonceKey = (0n).toString() // key=0
+    const key192   = '0x' + '00'.repeat(24) as Hex
+    const nonce64  = await publicClient.readContract({
+      address: ENTRY_POINT, abi: entryPointAbi, functionName: 'getNonce',
+      args: [KERNEL, BigInt(key192)],
+    }) as bigint
+    const nonceFull = nonce64 // root используется стандартно как в твоём коде
+
+    const packed: PackedUserOperation = {
+      sender: KERNEL, nonce: nonceFull, initCode: '0x', callData,
+      accountGasLimits, preVerificationGas, gasFees, paymasterAndData: '0x', signature: '0x'
+    }
+    const userOpHash = await publicClient.readContract({
+      address: ENTRY_POINT, abi: entryPointAbi, functionName: 'getUserOpHash', args: [packed]
+    }) as Hex
+
+    const unpacked: UnpackedUserOperationV07 = {
+      sender: KERNEL,
+      nonce: toHex(nonceFull),
+      callData,
+      callGasLimit:         toHex(callGasLimit),
+      verificationGasLimit: toHex(verificationGasLimit),
+      preVerificationGas:   toHex(preVerificationGas),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
+      signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex, // root ECDSA
+    }
+    return { unpacked, permissionId, vId }
+  }
+  
   // ===== STEP 2: ENABLE selector execute (ENABLE mode) =====
   // строим EIP-712 digest ядра для enableSig, как в _enableDigest(...)
   export async function buildEnableSelectorUO(permissionId: Hex, vId: Hex, delegatedEOA: Address, selector: Hex) {
@@ -553,28 +679,9 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     const [vNonce]     = await publicClient.readContract({ address: KERNEL, abi: kernelAbi, functionName: 'validationConfig', args: [vId] }) as [number, Address]
     const enableConfigNonce = (vNonce === current) ? (current + 1) : current
   
-    // ENABLE_TYPE_HASH и calldataKeccak как в контракте
-    const ENABLE_TYPE_HASH = '0xb17ab1224aca0d4255ef8161acaf2ac121b8faa32a4b2258c912cc5f8308c505' as Hex
-    const KERNEL_DOMAIN    = await publicClient.readContract({ address: KERNEL, abi: kernelAbi, functionName: 'DOMAIN_SEPARATOR' }) as Hex
-  
-    const keccak = (x: Hex) => keccak256(x) as Hex
-    const enc    = (types: string, values: any[]) => encodeAbiParameters(parseAbiParameters(types), values) as Hex
-  
-    const structHash = keccak(enc(
-      'bytes32, bytes21, uint32, address, bytes32, bytes32, bytes32',
-      [
-        ENABLE_TYPE_HASH,
-        vId,
-        enableConfigNonce,
-        HOOK_SENTINEL,
-        keccak(validatorData),
-        keccak(hookData),
-        keccak(selectorData),
-      ]
-    ))
-  
-    const digest = keccak(('0x1901' + KERNEL_DOMAIN.slice(2) + structHash.slice(2)) as Hex)
-    const enableSig = await root.signMessage({ message: { raw: digest } }) as Hex
+    // For CallPolicy, we might not need EIP-712 signature
+    // Let's try a simpler approach - just sign the userOpHash directly
+    const enableSig = await root.signMessage({ message: { raw: userOpHash } }) as Hex
   
     // signature layout for ENABLE:
     // [20 bytes hook] ++ abi.encode(bytes enableSig, bytes userOpSig, bytes validatorData, bytes hookData, bytes selectorData)

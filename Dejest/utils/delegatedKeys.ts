@@ -1,12 +1,51 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export type KeyType = 'sudo' | 'restricted';
+export type KeyType = 'sudo' | 'restricted' | 'callpolicy';
 
 export interface TokenLimit {
   tokenAddress: string;
   tokenSymbol: string;
   maxAmountPerDay: string;
   maxAmountPerTx: string;
+}
+
+export interface CallPolicyPermission {
+  callType: number; // 0 = CALLTYPE_SINGLE, 1 = CALLTYPE_DELEGATECALL
+  target: string;
+  selector: string;
+  valueLimit: string; // in ETH
+  rules: CallPolicyParamRule[];
+}
+
+export interface PredefinedAction {
+  id: string;
+  name: string;
+  description: string;
+  selector: string;
+  category: 'transfer' | 'approve' | 'swap' | 'stake' | 'other';
+}
+
+export interface CallPolicySettings {
+  allowedTargets: string[];
+  allowedActions: string[];
+  maxValuePerTx: string; // in ETH
+  maxValuePerDay: string; // in ETH
+}
+
+export interface CallPolicyParamRule {
+  condition: number; // ParamCondition enum
+  offset: number;
+  params: string[];
+}
+
+export enum CallPolicyParamCondition {
+  EQUAL = 0,
+  GREATER_THAN = 1,
+  LESS_THAN = 2,
+  GREATER_THAN_OR_EQUAL = 3,
+  LESS_THAN_OR_EQUAL = 4,
+  NOT_EQUAL = 5,
+  ONE_OF = 6
 }
 
 export type InstallationStatus = 'installing' | 'granting' | 'completed' | 'failed';
@@ -22,6 +61,7 @@ export interface DelegatedKeyData {
   whitelistAddresses?: string[];
   tokenLimits?: TokenLimit[];
   allowEveryone?: boolean;
+  callPolicyPermissions?: CallPolicyPermission[];
   installationStatus?: InstallationStatus;
   installationProgress?: {
     currentStep: string;

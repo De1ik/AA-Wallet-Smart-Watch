@@ -6,7 +6,7 @@ export interface GlobalInstallationState {
   isInstalling: boolean;
   deviceId: string | null;
   deviceName: string | null;
-  keyType: 'sudo' | 'restricted' | null;
+  keyType: 'sudo' | 'restricted' | 'callpolicy' | null;
   status: InstallationStatus | null;
   progress: number;
   currentStep: string;
@@ -47,7 +47,7 @@ class InstallationStateManager {
   }
 
   // Start installation tracking
-  startInstallation(deviceId: string, deviceName: string, keyType: 'sudo' | 'restricted') {
+  startInstallation(deviceId: string, deviceName: string, keyType: 'sudo' | 'restricted' | 'callpolicy') {
     console.log('[InstallationState] Starting installation tracking:', { deviceId, deviceName, keyType });
     
     this.updateState({

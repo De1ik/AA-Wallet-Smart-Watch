@@ -27,7 +27,7 @@ export interface WatchPermissionData {
   permissionId: string;
   vId: string;
   deviceName: string;
-  keyType: 'restricted' | 'sudo';
+  keyType: 'restricted' | 'sudo' | 'callpolicy';
   createdAt: string;
 }
 
