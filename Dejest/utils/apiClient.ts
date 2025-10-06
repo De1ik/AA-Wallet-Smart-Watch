@@ -45,6 +45,33 @@ export interface UserOpBroadcastResponse {
   txHash: string;
 }
 
+export interface InstallationStatus {
+  step: 'installing' | 'granting' | 'completed' | 'failed';
+  message: string;
+  progress: number; // 0-100
+  txHash?: string;
+  error?: string;
+}
+
+export interface CreateDelegatedKeyResponse {
+  success: boolean;
+  installationId: string;
+  message: string;
+}
+
+export interface PrefundCheckResponse {
+  hasPrefund: boolean;
+  message: string;
+  error?: string;
+  details?: string;
+}
+
+export interface RevokeKeyResponse {
+  success: boolean;
+  txHash: string;
+  message: string;
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -165,6 +192,31 @@ class ApiClient {
     return this.makeRequest<UserOpBroadcastResponse>('/wallet/userOp/broadcast', {
       method: 'POST',
       body: JSON.stringify(params),
+    });
+  }
+
+  // Simplified delegated key creation (new functionality)
+  async createDelegatedKey(params: {
+    delegatedEOA: string;
+    keyType: 'sudo' | 'restricted';
+    clientId?: string;
+  }): Promise<CreateDelegatedKeyResponse> {
+    return this.makeRequest<CreateDelegatedKeyResponse>('/wallet/delegated/create', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  // Check prefund status
+  async checkPrefund(): Promise<PrefundCheckResponse> {
+    return this.makeRequest<PrefundCheckResponse>('/wallet/prefund/check');
+  }
+
+  // Revoke delegated key access
+  async revokeKey(delegatedEOA: string): Promise<RevokeKeyResponse> {
+    return this.makeRequest<RevokeKeyResponse>('/wallet/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ delegatedEOA }),
     });
   }
 }

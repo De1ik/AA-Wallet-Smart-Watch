@@ -4,7 +4,8 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { apiClient } from '@/utils/apiClient';
+import { apiClient, InstallationStatus } from '@/utils/apiClient';
+import { wsClient } from '@/utils/websocketClient';
 import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey } from '@/utils/delegatedKeys';
 import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData } from '@/utils/smartWatchBridge';
@@ -23,6 +24,11 @@ export default function CreateDelegatedKeyScreen() {
   const [currentNonce, setCurrentNonce] = useState<string>('0');
   const [transactionStatus, setTransactionStatus] = useState<string>('');
   const [isAborting, setIsAborting] = useState(false);
+  
+  // Simplified installation state
+  const [installationStep, setInstallationStep] = useState<'installing' | 'granting' | 'completed' | 'failed'>('installing');
+  const [installationProgress, setInstallationProgress] = useState(0);
+  const [installationMessage, setInstallationMessage] = useState('');
   
   // Smart watch integration
   const { 
@@ -158,323 +164,117 @@ export default function CreateDelegatedKeyScreen() {
 
   const continueWithBlockchainOperations = async (keyPair: WatchKeyPair, deviceId: string) => {
     try {
-      // Step 2: Use the generated public key to create delegated access on blockchain
-      setBlockchainStep('Initializing blockchain operations...');
+      // Step 2: Use simplified API for delegated key creation
+      setBlockchainStep('Starting installation...');
+      setInstallationStep('installing');
+      setInstallationProgress(0);
+      setInstallationMessage('Connecting to server...');
+      
       console.log('Step 2: Creating delegated access on blockchain...');
       const delegatedEOA = keyPair.address as `0x${string}`;
-      let permissionId: string;
-      let vId: string;
 
-      // Helper function to update device progress
-      const updateDeviceProgress = async (progress: Partial<DelegatedKeyData['installationProgress']>) => {
-        await updateDelegatedKey(deviceId, {
-          installationProgress: {
-            currentStep: progress?.currentStep || '',
-            totalSteps: progress?.totalSteps || 0,
-            completedSteps: progress?.completedSteps || 0,
-            transactionStatus: progress?.transactionStatus,
-            currentNonce: progress?.currentNonce,
+      // Connect to WebSocket for real-time updates
+      wsClient.connect(
+        (status: InstallationStatus) => {
+          console.log('[ReactNative] Status update:', status);
+          setInstallationStep(status.step);
+          setInstallationProgress(status.progress);
+          setInstallationMessage(status.message);
+          
+          if (status.txHash) {
+            setTransactionStatus(`Tx: ${status.txHash.slice(0, 10)}...`);
           }
-        });
-      };
-      
-      if (keyType === 'sudo') {
-        setBlockchainStep('Setting up sudo access permissions...');
-        await updateDeviceProgress({ currentStep: 'Setting up sudo access permissions...', completedSteps: 0 });
-        
-        const rootNonceBefore = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceBefore.nonce);
-        setTransactionStatus(`Root nonce before: ${rootNonceBefore.nonce}`);
-        console.log('[ReactNative] -> Root nonce before:', rootNonceBefore.nonce);
-
-        // For sudo access: Install permission validation and grant access
-        setBlockchainStep('Installing permission validation...');
-        await updateDeviceProgress({ currentStep: 'Installing permission validation...', completedSteps: 0 });
-        console.log('Installing permission validation for sudo access...');
-        const installResult = await apiClient.installPermission(delegatedEOA);
-        permissionId = installResult.permissionId;
-        vId = installResult.vId;
-        console.log('Permission ID:', permissionId, 'vId:', vId);
-        
-        // Send install permission user operation
-        setTransactionStatus('Sending install permission transaction...');
-        await updateDeviceProgress({ 
-          currentStep: 'Sending install permission transaction...', 
-          transactionStatus: 'Sending transaction...',
-          completedSteps: 0 
-        });
-        const installTxHash = installResult.txHash;
-        console.log('Install permission tx:', installTxHash);
-        setTransactionStatus(`Install tx sent: ${installTxHash.slice(0, 10)}...`);
-        
-        // Wait for transaction to be processed with timeout
-        setBlockchainStep('Waiting for install transaction to be mined...');
-        await updateDeviceProgress({ 
-          currentStep: 'Waiting for install transaction to be mined...', 
-          transactionStatus: `Install tx sent: ${installTxHash.slice(0, 10)}...`,
-          completedSteps: 0 
-        });
-        let rootNonceAfterInstall = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceAfterInstall.nonce);
-        console.log('[ReactNative] -> Root nonce after install:', rootNonceAfterInstall.nonce);
-        
-        // Add timeout mechanism (max 5 minutes)
-        const maxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const startTime = Date.now();
-        let attempts = 0;
-        
-        while (BigInt(rootNonceAfterInstall.nonce) <= BigInt(rootNonceBefore.nonce)) {
-            attempts++;
-            const elapsedTime = Date.now() - startTime;
-            
-            if (elapsedTime > maxWaitTime) {
-                throw new Error(`Transaction timeout: Install transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterInstall.nonce}`);
-            }
-            
-            setTransactionStatus(`Waiting for nonce update... (attempt ${attempts}, elapsed: ${Math.round(elapsedTime/1000)}s, current: ${rootNonceAfterInstall.nonce})`);
-            await updateDeviceProgress({ 
-              currentStep: 'Waiting for install transaction to be mined...', 
-              transactionStatus: `Waiting for nonce update... (attempt ${attempts}, elapsed: ${Math.round(elapsedTime/1000)}s)`,
-              currentNonce: rootNonceAfterInstall.nonce,
-              completedSteps: 0 
-            });
-            console.log(`[ReactNative] -> Waiting for nonce update, attempt ${attempts}, current nonce: ${rootNonceAfterInstall.nonce}`);
-            
-            await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterInstall = await apiClient.getRootNonce();
-            setCurrentNonce(rootNonceAfterInstall.nonce);
-        }
-        setTransactionStatus('Install transaction confirmed!');
-        await updateDeviceProgress({ 
-          currentStep: 'Install transaction confirmed!', 
-          transactionStatus: 'Install transaction confirmed!',
-          completedSteps: 1 
-        });
-        
-        // Grant access
-        setBlockchainStep('Granting access to execute selector...');
-        await updateDeviceProgress({ 
-          currentStep: 'Granting access to execute selector...', 
-          transactionStatus: 'Install transaction confirmed!',
-          completedSteps: 1 
-        });
-        console.log('Granting access to execute selector...');
-        const grantResult = await apiClient.grantAccess(vId);
-        
-        // Send grant access user operation
-        setTransactionStatus('Sending grant access transaction...');
-        await updateDeviceProgress({ 
-          currentStep: 'Sending grant access transaction...', 
-          transactionStatus: 'Sending grant transaction...',
-          completedSteps: 1 
-        });
-        const grantTxHash = grantResult.txHash;
-        console.log('Grant access tx:', grantTxHash);
-        setTransactionStatus(`Grant tx sent: ${grantTxHash.slice(0, 10)}...`);
-
-        // Wait for transaction to be processed with timeout
-        setBlockchainStep('Waiting for grant transaction to be mined...');
-        await updateDeviceProgress({ 
-          currentStep: 'Waiting for grant transaction to be mined...', 
-          transactionStatus: `Grant tx sent: ${grantTxHash.slice(0, 10)}...`,
-          completedSteps: 1 
-        });
-        let rootNonceAfterGrant = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceAfterGrant.nonce);
-        console.log('[ReactNative] -> Root nonce after grant:', rootNonceAfterGrant.nonce);
-        
-        // Add timeout mechanism (max 5 minutes)
-        const grantMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const grantStartTime = Date.now();
-        let grantAttempts = 0;
-        
-        while (BigInt(rootNonceAfterGrant.nonce) <= BigInt(rootNonceAfterInstall.nonce)) {
-            grantAttempts++;
-            const grantElapsedTime = Date.now() - grantStartTime;
-            
-            if (grantElapsedTime > grantMaxWaitTime) {
-                throw new Error(`Transaction timeout: Grant transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterGrant.nonce}`);
-            }
-            
-            setTransactionStatus(`Waiting for nonce update... (attempt ${grantAttempts}, elapsed: ${Math.round(grantElapsedTime/1000)}s, current: ${rootNonceAfterGrant.nonce})`);
-            await updateDeviceProgress({ 
-              currentStep: 'Waiting for grant transaction to be mined...', 
-              transactionStatus: `Waiting for nonce update... (attempt ${grantAttempts}, elapsed: ${Math.round(grantElapsedTime/1000)}s)`,
-              currentNonce: rootNonceAfterGrant.nonce,
-              completedSteps: 1 
-            });
-            console.log(`[ReactNative] -> Waiting for grant nonce update, attempt ${grantAttempts}, current nonce: ${rootNonceAfterGrant.nonce}`);
-            
-            await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterGrant = await apiClient.getRootNonce();
-            setCurrentNonce(rootNonceAfterGrant.nonce);
-        }
-        setTransactionStatus('Grant transaction confirmed!');
-        await updateDeviceProgress({ 
-          currentStep: 'Grant transaction confirmed!', 
-          transactionStatus: 'Grant transaction confirmed!',
-          completedSteps: 2 
-        });
-        
-        setBlockchainStep('Sudo delegated key created successfully!');
-        await updateDeviceProgress({ 
-          currentStep: 'Sudo delegated key created successfully!', 
-          transactionStatus: 'Installation completed successfully!',
-          completedSteps: 3 
-        });
-        console.log('Sudo delegated key created successfully!');
-        
-        // Update device with final data
-        await updateDelegatedKey(deviceId, {
-          permissionId,
-          vId,
-          installationStatus: 'completed',
-          installationProgress: {
-            currentStep: 'Installation completed successfully!',
-            totalSteps: 3,
-            completedSteps: 3,
-            transactionStatus: 'Installation completed successfully!',
+          
+          if (status.step === 'completed') {
+            handleInstallationComplete(keyPair, deviceId);
+          } else if (status.step === 'failed') {
+            handleInstallationError(status.error || 'Unknown error', deviceId);
           }
-        });
-        
+        },
+        (connected: boolean) => {
+          console.log('[ReactNative] WebSocket connection:', connected);
+          
+          // Handle WebSocket connection loss
+          if (!connected) {
+            setInstallationMessage('Connection lost. Attempting to reconnect...');
+            
+            // Show a warning but don't fail the operation immediately
+            // The WebSocket client will attempt to reconnect automatically
+            setTimeout(() => {
+              if (!wsClient.isConnected()) {
+                Alert.alert(
+                  'Connection Lost',
+                  'Lost connection to the server. The installation may still be in progress. Please check your internet connection and try again if needed.',
+                  [
+                    {
+                      text: 'Continue',
+                      onPress: () => {
+                        // Allow user to continue waiting or cancel
+                      }
+                    },
+                    {
+                      text: 'Cancel',
+                      style: 'cancel',
+                      onPress: () => {
+                        wsClient.disconnect();
+                        setIsConnecting(false);
+                      }
+                    }
+                  ]
+                );
+              }
+            }, 10000); // Wait 10 seconds before showing the alert
       } else {
-        // For restricted access: Same flow but with restrictions
-        setBlockchainStep('Setting up restricted access permissions...');
-        console.log('Creating restricted delegated key...');
-        console.log('Whitelist addresses:', whitelistAddresses);
-        console.log('Token limits:', tokenLimits);
-        console.log('Allow everyone:', allowEveryone);
-        
-        const rootNonceBefore = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceBefore.nonce);
-        setTransactionStatus(`Root nonce before: ${rootNonceBefore.nonce}`);
-        console.log('[ReactNative] -> Root nonce before:', rootNonceBefore.nonce);
-        
-        // Install permission
-        setBlockchainStep('Installing permission validation...');
-        const installResult = await apiClient.installPermission(delegatedEOA);
-        permissionId = installResult.permissionId;
-        vId = installResult.vId;
-        
-        setTransactionStatus('Sending install permission transaction...');
-        const installTxHash = installResult.txHash;
-        console.log('[ReactNative] -> Install permission tx:', installTxHash);
-        setTransactionStatus(`Install tx sent: ${installTxHash.slice(0, 10)}...`);
-
-        // Wait for install transaction with timeout
-        setBlockchainStep('Waiting for install transaction to be mined...');
-        let rootNonceAfterInstall = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceAfterInstall.nonce);
-        console.log('[ReactNative] -> Root nonce after install:', rootNonceAfterInstall.nonce);
-
-        // Add timeout mechanism (max 5 minutes)
-        const installMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const installStartTime = Date.now();
-        let installAttempts = 0;
-
-        while (BigInt(rootNonceAfterInstall.nonce) <= BigInt(rootNonceBefore.nonce)) {
-            installAttempts++;
-            const installElapsedTime = Date.now() - installStartTime;
-            
-            if (installElapsedTime > installMaxWaitTime) {
-                throw new Error(`Transaction timeout: Install transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterInstall.nonce}`);
-            }
-            
-            setTransactionStatus(`Waiting for nonce update... (attempt ${installAttempts}, elapsed: ${Math.round(installElapsedTime/1000)}s, current: ${rootNonceAfterInstall.nonce})`);
-            console.log(`[ReactNative] -> Waiting for install nonce update, attempt ${installAttempts}, current nonce: ${rootNonceAfterInstall.nonce}`);
-            
-            await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterInstall = await apiClient.getRootNonce();
-            setCurrentNonce(rootNonceAfterInstall.nonce);
+            setInstallationMessage('Connected to server. Installation in progress...');
+          }
         }
-        setTransactionStatus('Install transaction confirmed!');
-        
-        // Enable selector
-        setBlockchainStep('Enabling selector for restricted access...');
-        const enableResult = await apiClient.enableSelector(permissionId, vId, delegatedEOA);
-        
-        setTransactionStatus('Sending enable selector transaction...');
-        const enableTxHash = enableResult.txHash;
-        console.log('[ReactNative] -> Enable selector tx:', enableTxHash);
-        setTransactionStatus(`Enable tx sent: ${enableTxHash.slice(0, 10)}...`);
+      );
 
-        // Wait for enable transaction with timeout
-        setBlockchainStep('Waiting for enable transaction to be mined...');
-        let rootNonceAfterEnable = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceAfterEnable.nonce);
-        
-        // Add timeout mechanism (max 5 minutes)
-        const enableMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const enableStartTime = Date.now();
-        let enableAttempts = 0;
-        
-        while (BigInt(rootNonceAfterEnable.nonce) <= BigInt(rootNonceAfterInstall.nonce)) {
-            enableAttempts++;
-            const enableElapsedTime = Date.now() - enableStartTime;
-            
-            if (enableElapsedTime > enableMaxWaitTime) {
-                throw new Error(`Transaction timeout: Enable transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterEnable.nonce}`);
-            }
-            
-            setTransactionStatus(`Waiting for nonce update... (attempt ${enableAttempts}, elapsed: ${Math.round(enableElapsedTime/1000)}s, current: ${rootNonceAfterEnable.nonce})`);
-            console.log(`[ReactNative] -> Waiting for enable nonce update, attempt ${enableAttempts}, current nonce: ${rootNonceAfterEnable.nonce}`);
-            
-            await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterEnable = await apiClient.getRootNonce();
-            setCurrentNonce(rootNonceAfterEnable.nonce);
+      // Check prefund first
+      setInstallationMessage('Checking account balance...');
+      try {
+        const prefundCheck = await apiClient.checkPrefund();
+        if (!prefundCheck.hasPrefund) {
+          throw new Error(prefundCheck.message || 'Insufficient funds in EntryPoint');
         }
-        setTransactionStatus('Enable transaction confirmed!');
-        
-        // Grant access
-        setBlockchainStep('Granting access to execute selector...');
-        const grantResult = await apiClient.grantAccess(vId);
-        
-        setTransactionStatus('Sending grant access transaction...');
-        const grantTxHash = grantResult.txHash;
-        setTransactionStatus(`Grant tx sent: ${grantTxHash.slice(0, 10)}...`);
-        
-        // Wait for grant transaction with timeout
-        setBlockchainStep('Waiting for grant transaction to be mined...');
-        let rootNonceAfterGrant = await apiClient.getRootNonce();
-        setCurrentNonce(rootNonceAfterGrant.nonce);
-        
-        // Add timeout mechanism (max 5 minutes)
-        const finalGrantMaxWaitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const finalGrantStartTime = Date.now();
-        let finalGrantAttempts = 0;
-        
-        while (BigInt(rootNonceAfterGrant.nonce) <= BigInt(rootNonceAfterEnable.nonce)) {
-            finalGrantAttempts++;
-            const finalGrantElapsedTime = Date.now() - finalGrantStartTime;
-            
-            if (finalGrantElapsedTime > finalGrantMaxWaitTime) {
-                throw new Error(`Transaction timeout: Grant transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfterGrant.nonce}`);
-            }
-            
-            setTransactionStatus(`Waiting for nonce update... (attempt ${finalGrantAttempts}, elapsed: ${Math.round(finalGrantElapsedTime/1000)}s, current: ${rootNonceAfterGrant.nonce})`);
-            console.log(`[ReactNative] -> Waiting for final grant nonce update, attempt ${finalGrantAttempts}, current nonce: ${rootNonceAfterGrant.nonce}`);
-            
-            await new Promise(r => setTimeout(r, 10000)) // Increased to 10 seconds
-            rootNonceAfterGrant = await apiClient.getRootNonce();
-            setCurrentNonce(rootNonceAfterGrant.nonce);
-        }
-        setTransactionStatus('Grant transaction confirmed!');
-        setBlockchainStep('Restricted delegated key created successfully!');
-        
-        console.log('Restricted delegated key created successfully!');
-        console.log('Note: Custom validation logic needs to be implemented for restrictions');
+      } catch (prefundError: any) {
+        const errorMessage = prefundError.message || 'Failed to check account balance';
+        throw new Error(`Account balance check failed: ${errorMessage}`);
       }
 
+      // Start the installation process
+      const clientId = wsClient.getClientId();
+      const result = await apiClient.createDelegatedKey({
+        delegatedEOA,
+        keyType,
+        clientId
+      });
+
+      console.log('Installation started:', result);
+      setInstallationMessage('Installation started on server...');
+
+    } catch (error) {
+      console.error('Error starting blockchain operations:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      handleInstallationError(errorMessage, deviceId);
+    }
+  };
+
+  const handleInstallationComplete = async (keyPair: WatchKeyPair, deviceId: string) => {
+    try {
       // Step 3: Save delegated key data to AsyncStorage
       setBlockchainStep('Saving delegated key data...');
       setTransactionStatus('Storing key data locally...');
       console.log('Step 3: Saving delegated key data...');
+      
+      // For now, we'll use placeholder values since the server doesn't return them yet
+      // In a real implementation, the server should return permissionId and vId
       const delegatedKeyData: DelegatedKeyData = {
         id: Date.now().toString(),
         deviceName: deviceName.trim(),
         keyType,
-        permissionId,
-        vId,
+        permissionId: '0x00000000', // Placeholder - should come from server
+        vId: '0x000000000000000000000000000000000000000000', // Placeholder - should come from server
         publicAddress: keyPair.address,
         createdAt: new Date().toISOString(),
         ...(keyType === 'restricted' && {
@@ -492,8 +292,8 @@ export default function CreateDelegatedKeyScreen() {
       setTransactionStatus('Sending data to Apple Watch...');
       console.log('Step 4: Syncing permission data to smart watch...');
       const watchPermissionData: WatchPermissionData = {
-        permissionId,
-        vId,
+        permissionId: delegatedKeyData.permissionId,
+        vId: delegatedKeyData.vId,
         deviceName: deviceName.trim(),
         keyType,
         createdAt: delegatedKeyData.createdAt
@@ -506,18 +306,24 @@ export default function CreateDelegatedKeyScreen() {
       
       Alert.alert(
         'Success!',
-        `Delegated key created successfully for ${deviceName}.\n\nKey Type: ${keyType === 'sudo' ? 'Sudo Access' : 'Restricted Access'}\nPublic Key: ${keyPair.address.slice(0, 10)}...\nPermission ID: ${permissionId.slice(0, 10)}...\nvId: ${vId.slice(0, 10)}...\n\nYour smart watch can now perform transactions on your behalf.`,
+        `Delegated key created successfully for ${deviceName}.\n\nKey Type: ${keyType === 'sudo' ? 'Sudo Access' : 'Restricted Access'}\nPublic Key: ${keyPair.address.slice(0, 10)}...\n\nYour smart watch can now perform transactions on your behalf.`,
         [
           {
             text: 'OK',
-            onPress: () => router.back()
+            onPress: () => {
+              wsClient.disconnect();
+              router.back();
+            }
           }
         ]
       );
     } catch (error) {
-      console.error('Error in blockchain operations:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
+      console.error('Error in post-installation steps:', error);
+      handleInstallationError(error instanceof Error ? error.message : 'Unknown error', deviceId);
+    }
+  };
+
+  const handleInstallationError = async (errorMessage: string, deviceId: string) => {
       // Mark installation as failed if we have a device ID
       if (deviceId) {
         try {
@@ -525,7 +331,7 @@ export default function CreateDelegatedKeyScreen() {
             installationStatus: 'failed',
             installationProgress: {
               currentStep: 'Installation failed',
-              totalSteps: keyType === 'sudo' ? 3 : 4,
+            totalSteps: 3,
               completedSteps: 0,
               transactionStatus: errorMessage,
             }
@@ -535,13 +341,50 @@ export default function CreateDelegatedKeyScreen() {
         }
       }
       
-      Alert.alert(
-        'Error', 
-        `Failed to create delegated key: ${errorMessage}\n\nPlease try again.`
-      );
-    } finally {
+    // Provide specific error messages based on error type
+    let userFriendlyMessage = errorMessage;
+    let title = 'Installation Failed';
+    let showRetryOption = false;
+    
+    if (errorMessage.includes('Insufficient funds') || errorMessage.includes('AA21')) {
+      title = 'Insufficient Funds';
+      userFriendlyMessage = 'Your account doesn\'t have enough ETH deposited in the EntryPoint to pay for transaction fees.\n\nPlease deposit more ETH to your smart wallet first.';
+    } else if (errorMessage.includes('Network error') || errorMessage.includes('RPC')) {
+      title = 'Network Error';
+      userFriendlyMessage = 'Unable to connect to the blockchain network.\n\nPlease check your internet connection and try again.';
+      showRetryOption = true;
+    } else if (errorMessage.includes('timeout')) {
+      title = 'Transaction Timeout';
+      userFriendlyMessage = 'The transaction took too long to complete.\n\nPlease try again with higher gas fees or check network congestion.';
+      showRetryOption = true;
+    } else if (errorMessage.includes('Connection') || errorMessage.includes('WebSocket')) {
+      title = 'Connection Error';
+      userFriendlyMessage = 'Lost connection to the server during installation.\n\nThe installation may still be in progress. Please check your connection and try again.';
+      showRetryOption = true;
+    }
+    
+    const buttons = [
+      {
+        text: 'OK',
+        onPress: () => {
+          wsClient.disconnect();
       setIsConnecting(false);
     }
+      }
+    ];
+
+    if (showRetryOption) {
+      buttons.unshift({
+        text: 'Retry',
+        onPress: () => {
+          wsClient.resetConnection();
+          setIsConnecting(false);
+          // User can try again by clicking the create button
+        }
+      });
+    }
+    
+    Alert.alert(title, userFriendlyMessage, buttons);
   };
 
   const handleCreateKey = async () => {
@@ -925,42 +768,93 @@ export default function CreateDelegatedKeyScreen() {
               </View>
             )}
 
-            {/* Blockchain Progress Section */}
-            {isConnecting && (blockchainStep || transactionStatus) && (
+            {/* Simplified Installation Progress Section */}
+            {isConnecting && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Blockchain Operations</Text>
+                <Text style={styles.sectionTitle}>Installation Progress</Text>
                 
-                <View style={styles.progressContainer}>
-                  <View style={styles.progressHeader}>
-                    <IconSymbol 
-                      name="arrow.clockwise" 
-                      size={20} 
-                      color="#8B5CF6" 
-                    />
-                    <Text style={styles.progressTitle}>Processing...</Text>
+                <View style={styles.simpleProgressContainer}>
+                  {/* Step 1: Installing */}
+                  <View style={styles.stepContainer}>
+                    <View style={[
+                      styles.stepCircle,
+                      (installationStep === 'installing' || installationStep === 'granting' || installationStep === 'completed') && styles.stepCircleActive,
+                      installationStep === 'completed' && styles.stepCircleCompleted
+                    ]}>
+                      <Text style={[
+                        styles.stepText,
+                        (installationStep === 'installing' || installationStep === 'granting' || installationStep === 'completed') && styles.stepTextActive
+                      ]}>
+                        Installing
+                      </Text>
+                    </View>
+                    {installationStep !== 'installing' && (
+                      <View style={styles.stepArrow}>
+                        <Text style={styles.stepArrowText}>→</Text>
+                      </View>
+                    )}
                   </View>
                   
-                  {blockchainStep && (
-                    <View style={styles.progressStep}>
-                      <Text style={styles.progressStepLabel}>Current Step:</Text>
-                      <Text style={styles.progressStepText}>{blockchainStep}</Text>
+                  {/* Step 2: Grant */}
+                  <View style={styles.stepContainer}>
+                    <View style={[
+                      styles.stepCircle,
+                      (installationStep === 'granting' || installationStep === 'completed') && styles.stepCircleActive,
+                      installationStep === 'completed' && styles.stepCircleCompleted
+                    ]}>
+                      <Text style={[
+                        styles.stepText,
+                        (installationStep === 'granting' || installationStep === 'completed') && styles.stepTextActive
+                      ]}>
+                        Grant
+                      </Text>
+                    </View>
+                    {installationStep !== 'granting' && installationStep !== 'completed' && (
+                      <View style={styles.stepArrow}>
+                        <Text style={styles.stepArrowText}>→</Text>
+                    </View>
+                  )}
+                  </View>
+
+                  {/* Step 3: Complete */}
+                  <View style={styles.stepContainer}>
+                    <View style={[
+                      styles.stepCircle,
+                      installationStep === 'completed' && styles.stepCircleCompleted
+                    ]}>
+                      <Text style={[
+                        styles.stepText,
+                        installationStep === 'completed' && styles.stepTextCompleted
+                      ]}>
+                        {installationStep === 'completed' ? '✓' : 'Complete'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Progress Message */}
+                {installationMessage && (
+                  <View style={styles.progressMessageContainer}>
+                    <Text style={styles.progressMessage}>{installationMessage}</Text>
+                    {installationProgress > 0 && (
+                      <View style={styles.progressBarContainer}>
+                        <View style={styles.progressBar}>
+                          <View style={[styles.progressBarFill, { width: `${installationProgress}%` }]} />
+                        </View>
+                        <Text style={styles.progressPercentage}>{installationProgress}%</Text>
+                      </View>
+                    )}
                     </View>
                   )}
                   
-                  {transactionStatus && (
-                    <View style={styles.progressStep}>
-                      <Text style={styles.progressStepLabel}>Status:</Text>
-                      <Text style={styles.progressStepText}>{transactionStatus}</Text>
+                {/* Transaction Status */}
+                {transactionStatus && (
+                  <View style={styles.transactionStatusContainer}>
+                    <Text style={styles.transactionStatusText}>{transactionStatus}</Text>
                     </View>
                   )}
                   
-                  {currentNonce !== '0' && (
-                    <View style={styles.progressStep}>
-                      <Text style={styles.progressStepLabel}>Root Nonce:</Text>
-                      <Text style={styles.progressStepText}>{currentNonce}</Text>
-                    </View>
-                  )}
-                  
+                {/* Progress Note */}
                   <View style={styles.progressNote}>
                     <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
                     <Text style={styles.progressNoteText}>
@@ -968,6 +862,7 @@ export default function CreateDelegatedKeyScreen() {
                     </Text>
                   </View>
                   
+                {/* Cancel Button */}
                   <TouchableOpacity
                     style={styles.cancelButton}
                     onPress={handleCancelOperation}
@@ -978,7 +873,6 @@ export default function CreateDelegatedKeyScreen() {
                       {isAborting ? 'Cancelling...' : 'Cancel Operation'}
                     </Text>
                   </TouchableOpacity>
-                </View>
               </View>
             )}
 
@@ -1725,6 +1619,108 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#A0A0A0',
     lineHeight: 16,
+  },
+  
+  // Simplified progress styles
+  simpleProgressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+  },
+  stepContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stepCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 2,
+    borderColor: '#333333',
+    backgroundColor: '#1A1A1A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 10,
+  },
+  stepCircleActive: {
+    borderColor: '#007AFF',
+    backgroundColor: '#001A3A',
+  },
+  stepCircleCompleted: {
+    borderColor: '#34C759',
+    backgroundColor: '#003A1A',
+  },
+  stepText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666666',
+    textAlign: 'center',
+  },
+  stepTextActive: {
+    color: '#007AFF',
+  },
+  stepTextCompleted: {
+    color: '#34C759',
+    fontSize: 16,
+  },
+  stepArrow: {
+    marginHorizontal: 5,
+  },
+  stepArrowText: {
+    fontSize: 16,
+    color: '#666666',
+  },
+  progressMessageContainer: {
+    marginTop: 20,
+    padding: 16,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  progressMessage: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  progressBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  progressBar: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#333333',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#007AFF',
+    borderRadius: 3,
+  },
+  progressPercentage: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    fontWeight: '600',
+    minWidth: 35,
+  },
+  transactionStatusContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#0F0F0F',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  transactionStatusText: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    fontFamily: 'monospace',
+    textAlign: 'center',
   },
   cancelButton: {
     flexDirection: 'row',

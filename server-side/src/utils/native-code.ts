@@ -35,12 +35,17 @@ import {
   const ECDSA_SIGNER: Address = '0x6A6F069E2a08c2468e7724Ab3250CdBFBA14D4FF'
   const SUDO_POLICY:  Address = '0x67b436caD8a6D025DF6C82C5BB43fbF11fC5B9B7'
   
-  // fees / amounts
-  // const MAX_FEE_PER_GAS  = 30n * 10n ** 9n
-  // const MAX_PRIORITY_FEE =  2n * 10n ** 9n
-  const MAX_FEE_PER_GAS    = 5n * 10n ** 9n   // 5 gwei
-  const MAX_PRIORITY_FEE   = 1n * 10n ** 9n   // 1 gwei
-  const DEPOSIT_AMOUNT   = parseEther('0.003')
+// fees / amounts - FALLBACK VALUES (used when dynamic estimation fails)
+const FALLBACK_MAX_FEE_PER_GAS    = 5n * 10n ** 9n   // 5 gwei fallback
+const FALLBACK_MAX_PRIORITY_FEE   = 1n * 10n ** 9n   // 1 gwei fallback
+const DEPOSIT_AMOUNT   = parseEther('0.003')
+
+// Dynamic fee configuration
+const FEE_MULTIPLIER = 12n; // 20% buffer above network rates (1.2 * 10 = 12)
+const MIN_FEE_PER_GAS = 1n * 10n ** 9n; // 1 gwei minimum
+const MAX_FEE_PER_GAS_LIMIT = 50n * 10n ** 9n; // 50 gwei maximum
+const MIN_PRIORITY_FEE = 1n * 10n ** 8n; // 0.1 gwei minimum (0.1 * 1e9)
+const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
   
   // test transfer
   const TARGET: Address  = '0xe069d36Fe1f7B41c7B8D4d453d99D4D86d620c15'
@@ -211,6 +216,107 @@ import {
     return ('0x' + policyPrefix + 'ff' + delegatedSig65.slice(2)) as Hex
   }
   
+  // ===== Dynamic Fee Calculation =====
+  
+  // Get current network gas prices
+  export async function getCurrentGasPrices(): Promise<{
+    maxFeePerGas: bigint;
+    maxPriorityFeePerGas: bigint;
+  }> {
+    try {
+      console.log('🔍 Fetching current gas prices...');
+      
+      // Get fee history to calculate dynamic fees
+      const feeHistory = await (publicClient as any).request({
+        method: 'eth_feeHistory',
+        params: [4, 'latest', [25, 50, 75]] // Last 4 blocks, percentiles
+      });
+      
+      // Calculate base fee (average of last few blocks)
+      const baseFeePerGas = feeHistory.baseFeePerGas;
+      const latestBaseFee = BigInt(baseFeePerGas[baseFeePerGas.length - 1]);
+      
+      // Calculate priority fee (median of 50th percentile)
+      const priorityFees = feeHistory.reward
+        .map((blockRewards: any[]) => BigInt(blockRewards[1])) // 50th percentile
+        .filter((fee: bigint) => fee > 0n);
+      
+      const medianPriorityFee = priorityFees.length > 0 
+        ? priorityFees.sort((a: bigint, b: bigint) => Number(a - b))[Math.floor(priorityFees.length / 2)]
+        : MIN_PRIORITY_FEE;
+      
+      // Calculate dynamic fees
+      let maxFeePerGas = latestBaseFee + medianPriorityFee;
+      maxFeePerGas = (maxFeePerGas * FEE_MULTIPLIER) / 10n; // Apply 20% buffer
+      
+      // Apply limits
+      maxFeePerGas = maxFeePerGas < MIN_FEE_PER_GAS ? MIN_FEE_PER_GAS : maxFeePerGas;
+      maxFeePerGas = maxFeePerGas > MAX_FEE_PER_GAS_LIMIT ? MAX_FEE_PER_GAS_LIMIT : maxFeePerGas;
+      
+      const maxPriorityFeePerGas = medianPriorityFee < MIN_PRIORITY_FEE ? MIN_PRIORITY_FEE : medianPriorityFee;
+      const cappedPriorityFee = maxPriorityFeePerGas > MAX_PRIORITY_FEE_LIMIT ? MAX_PRIORITY_FEE_LIMIT : maxPriorityFeePerGas;
+      
+      console.log('💰 Dynamic gas prices calculated:');
+      console.log(`   Base Fee: ${latestBaseFee.toString()} wei`);
+      console.log(`   Priority Fee: ${cappedPriorityFee.toString()} wei`);
+      console.log(`   Max Fee: ${maxFeePerGas.toString()} wei`);
+      console.log(`   Max Fee: ${Number(maxFeePerGas) / 1e9} gwei`);
+      
+      return {
+        maxFeePerGas,
+        maxPriorityFeePerGas: cappedPriorityFee
+      };
+      
+    } catch (error) {
+      console.warn('⚠️ Failed to fetch dynamic gas prices, using fallback:', error);
+      return {
+        maxFeePerGas: FALLBACK_MAX_FEE_PER_GAS,
+        maxPriorityFeePerGas: FALLBACK_MAX_PRIORITY_FEE
+      };
+    }
+  }
+  
+  // Get optimized gas limits for different operations
+  export function getOptimizedGasLimits(operation: 'install' | 'grant' | 'enable' | 'send' | 'uninstall'): {
+    verificationGasLimit: bigint;
+    callGasLimit: bigint;
+    preVerificationGas: bigint;
+  } {
+    switch (operation) {
+      case 'install':
+      case 'uninstall':
+        return {
+          verificationGasLimit: 350_000n,
+          callGasLimit: 600_000n,
+          preVerificationGas: 100_000n
+        };
+      case 'grant':
+        return {
+          verificationGasLimit: 300_000n,
+          callGasLimit: 200_000n,
+          preVerificationGas: 80_000n
+        };
+      case 'enable':
+        return {
+          verificationGasLimit: 220_000n,
+          callGasLimit: 60_000n,
+          preVerificationGas: 80_000n
+        };
+      case 'send':
+        return {
+          verificationGasLimit: 200_000n,
+          callGasLimit: 220_000n,
+          preVerificationGas: 80_000n
+        };
+      default:
+        return {
+          verificationGasLimit: 300_000n,
+          callGasLimit: 300_000n,
+          preVerificationGas: 100_000n
+        };
+    }
+  }
+
   // ===== Gas helpers & bundler =====
   export async function estimateAndPatch(unpacked: UnpackedUserOperationV07) {
     try {
@@ -245,12 +351,12 @@ import {
     const execData = encodeSingle(ENTRY_POINT, depositAmount, depositCalldata)
     const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix())
   
-    // соберём root-lane UO
-    let verificationGasLimit = 350_000n
-    let callGasLimit         = 600_000n
-    let preVerificationGas   = 100_000n
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('install');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     // root lane key (mode=0x00,type=0x00)
     // const id20= '0x' + '00'.repeat(20) as Hex
@@ -277,8 +383,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex, // root ECDSA
     }
     return { packed, unpacked, userOpHash };
@@ -291,15 +397,12 @@ import {
     const execData = encodeSingle(target, value, data);
     const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix())
   
-    // соберём root-lane UO
-    // let verificationGasLimit = 120_000n
-    // let callGasLimit         = 100_000n
-    // let preVerificationGas   = 40_000n
-    let verificationGasLimit = 350_000n
-    let callGasLimit         = 600_000n
-    let preVerificationGas   = 100_000n
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('install');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     // root lane key (mode=0x00,type=0x00)
     // const id20= '0x' + '00'.repeat(20) as Hex
@@ -326,8 +429,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex, // root ECDSA
     }
     return { packed, unpacked, userOpHash };
@@ -340,13 +443,13 @@ import {
       [{type:'address'},{type:'address'}],
       [KERNEL, delegatedEOA]
     )) as Hex).slice(0,10) as Hex // 4 bytes
-  
+
     const vId = vIdFromPermissionId(permissionId)
     const validationData = buildPermissionValidationData(delegatedEOA)
-  
+
     // Конфиг-нонс ядра
     const current = await publicClient.readContract({ address: KERNEL, abi: kernelAbi, functionName: 'currentNonce' }) as number
-  
+
     const installCalldata = encodeFunctionData({
       abi: kernelInstallValidationsAbi,
       functionName: 'installValidations',
@@ -359,13 +462,13 @@ import {
     })
     const execData = encodeSingle(KERNEL, 0n, installCalldata)
     const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix())
-  
-    // соберём root-lane UO
-    let verificationGasLimit = 350_000n
-    let callGasLimit         = 600_000n
-    let preVerificationGas   = 100_000n
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('install');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     // root lane key (mode=0x00,type=0x00)
     const nonceKey = (0n).toString() // key=0
@@ -391,8 +494,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex, // root ECDSA
     }
     return { unpacked, permissionId, vId }
@@ -416,12 +519,12 @@ import {
     const hookData      = '0x'
     const selectorData  = selector // достаточно ровно 4 байта
   
-    // userOp (без callData — просто enable)
-    let verificationGasLimit = 220_000n
-    let callGasLimit         =  60_000n
-    let preVerificationGas   =  80_000n
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('enable');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     const packed: PackedUserOperation = {
       sender: KERNEL,
@@ -491,8 +594,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature: enablePacked,
     }
     return { unpacked }
@@ -505,17 +608,17 @@ import {
       functionName: 'grantAccess',
       args: [vId, selector, isGrant],
     })
-  
+
     // завернём в execute (self-call)
     const execData = encodeSingle(KERNEL, 0n, grantCalldata)
     const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix())
-  
-    // --- gas config
-    let verificationGasLimit = 300_000n
-    let callGasLimit         = 200_000n
-    let preVerificationGas   = 80_000n
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('grant');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     // --- root lane nonce
     const key192   = '0x' + '00'.repeat(24) as Hex
@@ -550,8 +653,8 @@ import {
       callGasLimit:         callGasLimit,
       verificationGasLimit: verificationGasLimit,
       preVerificationGas:   preVerificationGas,
-      maxPriorityFeePerGas: MAX_PRIORITY_FEE,
-      maxFeePerGas:         MAX_FEE_PER_GAS,
+        maxPriorityFeePerGas: maxPriorityFeePerGas,
+        maxFeePerGas:         maxFeePerGas,
       paymasterAndData: '0x',
       signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
     }
@@ -564,8 +667,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
     }
   
@@ -590,12 +693,13 @@ import {
     // callData = Kernel.execute(...)
     const execCalldata = encodeSingle(target, value, data)
     const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execCalldata, await rootHookRequiresPrefix())
-  
-    let verificationGasLimit = 200_000n
-    let callGasLimit         = 220_000n
-    let preVerificationGas   = 80_000n
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('send');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     const packed: PackedUserOperation = {
       sender: KERNEL, nonce: nonceFull, initCode: '0x', callData,
@@ -618,8 +722,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature,
     }
     return { unpacked, userOpHash }
@@ -629,8 +733,8 @@ import {
   export async function buildUninstallPermissionUO(delegatedEOA: Address) {
     // permissionId: bytes4 (просто стабильный детерминированный id)
     const permissionId = (keccak256(encodeAbiParameters(
-      [{type:'address'},{type:'address'},{type:'address'}],
-      [KERNEL, SUDO_POLICY, delegatedEOA]
+      [{type:'address'},{type:'address'}],
+      [KERNEL, delegatedEOA]
     )) as Hex).slice(0,10) as Hex // 4 bytes
   
     const vId = vIdFromPermissionId(permissionId)
@@ -650,13 +754,13 @@ import {
     })
     const execData = encodeSingle(KERNEL, 0n, uninstallCalldata)
     const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix())
-  
-    // соберём root-lane UO
-    let verificationGasLimit = 350_000n
-    let callGasLimit         = 600_000n
-    let preVerificationGas   = 100_000n
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('uninstall');
+    
     const accountGasLimits   = packAccountGasLimits(verificationGasLimit, callGasLimit)
-    const gasFees            = packGasFees(MAX_PRIORITY_FEE, MAX_FEE_PER_GAS)
+    const gasFees            = packGasFees(maxPriorityFeePerGas, maxFeePerGas)
   
     // root lane key (mode=0x00,type=0x00)
     const nonceKey = (0n).toString() // key=0
@@ -682,8 +786,8 @@ import {
       callGasLimit:         toHex(callGasLimit),
       verificationGasLimit: toHex(verificationGasLimit),
       preVerificationGas:   toHex(preVerificationGas),
-      maxPriorityFeePerGas: toHex(MAX_PRIORITY_FEE),
-      maxFeePerGas:         toHex(MAX_FEE_PER_GAS),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas:         toHex(maxFeePerGas),
       signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex, // root ECDSA
     }
     return { unpacked, permissionId, vId }

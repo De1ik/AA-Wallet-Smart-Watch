@@ -1,7 +1,9 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { createServer } from "http";
 import walletRouter from "./routes/wallet";
+import { WebSocketService } from "./services/websocket";
 
 console.log("Starting backend...");
 
@@ -19,6 +21,12 @@ app.get("/", (req, res) => {
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => {
+const server = createServer(app);
+
+// Initialize WebSocket service
+export const wsService = new WebSocketService(server);
+
+server.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
+  console.log(`WebSocket server ready for connections`);
 });

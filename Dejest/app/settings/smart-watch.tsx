@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, InstallationStatus } from '@/utils/delegatedKeys';
+import { apiClient } from '@/utils/apiClient';
 
 export default function SmartWatchScreen() {
   const [connectedDevices, setConnectedDevices] = useState<DelegatedKeyData[]>([]);
@@ -13,6 +14,7 @@ export default function SmartWatchScreen() {
   const [revokeAddress, setRevokeAddress] = useState('');
   const [showDeviceDetails, setShowDeviceDetails] = useState(false);
   const [selectedDeviceForDetails, setSelectedDeviceForDetails] = useState<DelegatedKeyData | null>(null);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   // Load delegated keys on component mount
   useEffect(() => {
@@ -143,31 +145,57 @@ export default function SmartWatchScreen() {
       return;
     }
 
+    // Validate Ethereum address format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(revokeAddress.trim())) {
+      Alert.alert('Error', 'Please enter a valid Ethereum address (0x...)');
+      return;
+    }
+
     Alert.alert(
       'Revoke Delegated Key',
-      `Are you sure you want to revoke the delegated key for address:\n\n${revokeAddress}\n\nThis action cannot be undone and will permanently remove the key.`,
+      `Are you sure you want to revoke the delegated key for address:\n\n${revokeAddress}\n\nThis action cannot be undone and will permanently remove the key from the blockchain.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Revoke',
           style: 'destructive',
           onPress: async () => {
+            setIsRevoking(true);
             try {
-              const keys = await getDelegatedKeys();
-              const keyToRevoke = keys.find(key => key.publicAddress.toLowerCase() === revokeAddress.toLowerCase());
+              console.log('Revoking delegated key for address:', revokeAddress);
               
-              if (!keyToRevoke) {
-                Alert.alert('Error', 'No delegated key found with this public address');
-                return;
+              // Call server API to revoke the key on blockchain
+              const response = await apiClient.revokeKey(revokeAddress.trim());
+              
+              if (response.success) {
+                // Also remove from local storage if it exists
+                try {
+                  const keys = await getDelegatedKeys();
+                  const keyToRevoke = keys.find(key => key.publicAddress.toLowerCase() === revokeAddress.toLowerCase());
+                  if (keyToRevoke) {
+                    await removeDelegatedKey(keyToRevoke.id);
+                  }
+                } catch (localError) {
+                  console.warn('Could not remove from local storage:', localError);
+                }
+                
+                await loadDelegatedKeys();
+                setRevokeAddress('');
+                
+                Alert.alert(
+                  'Success', 
+                  `Delegated key revoked successfully!\n\nTransaction Hash: ${response.txHash}`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('Error', 'Failed to revoke delegated key');
               }
-
-              await removeDelegatedKey(keyToRevoke.id);
-              await loadDelegatedKeys();
-              setRevokeAddress('');
-              Alert.alert('Success', 'Delegated key revoked successfully');
-            } catch (error) {
+            } catch (error: any) {
               console.error('Error revoking delegated key:', error);
-              Alert.alert('Error', 'Failed to revoke delegated key');
+              const errorMessage = error?.message || 'Failed to revoke delegated key';
+              Alert.alert('Error', errorMessage);
+            } finally {
+              setIsRevoking(false);
             }
           }
         }
@@ -363,11 +391,18 @@ export default function SmartWatchScreen() {
                   autoCorrect={false}
                 />
                 <TouchableOpacity
-                  style={styles.revokeButton}
+                  style={[styles.revokeButton, isRevoking && styles.revokeButtonDisabled]}
                   onPress={handleRevokeByAddress}
+                  disabled={isRevoking}
                 >
-                  <IconSymbol name="trash" size={16} color="#FFFFFF" />
-                  <Text style={styles.revokeButtonText}>Revoke</Text>
+                  {isRevoking ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                  )}
+                  <Text style={styles.revokeButtonText}>
+                    {isRevoking ? 'Revoking...' : 'Revoke'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -999,6 +1034,10 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  revokeButtonDisabled: {
+    backgroundColor: '#666666',
+    opacity: 0.6,
   },
   revokeAllButton: {
     backgroundColor: '#DC2626',
