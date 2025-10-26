@@ -51,6 +51,8 @@ export interface InstallationStatus {
   progress: number; // 0-100
   txHash?: string;
   error?: string;
+  permissionId?: string;
+  vId?: string;
 }
 
 export interface CreateDelegatedKeyResponse {
@@ -64,6 +66,16 @@ export interface PrefundCheckResponse {
   message: string;
   error?: string;
   details?: string;
+  depositWei?: string;
+  requiredPrefundWei?: string;
+  shortfallWei?: string;
+}
+
+export interface EntryPointDepositResponse {
+  success: boolean;
+  txHash?: string;
+  message: string;
+  error?: string;
 }
 
 export interface RevokeKeyResponse {
@@ -198,8 +210,9 @@ class ApiClient {
   // Simplified delegated key creation (new functionality)
   async createDelegatedKey(params: {
     delegatedEOA: string;
-    keyType: 'sudo' | 'restricted';
+    keyType: 'sudo' | 'restricted' | 'callpolicy';
     clientId?: string;
+    permissions?: any[]; // CallPolicy permissions for restricted keys
   }): Promise<CreateDelegatedKeyResponse> {
     return this.makeRequest<CreateDelegatedKeyResponse>('/wallet/delegated/create', {
       method: 'POST',
@@ -209,7 +222,17 @@ class ApiClient {
 
   // Check prefund status
   async checkPrefund(): Promise<PrefundCheckResponse> {
-    return this.makeRequest<PrefundCheckResponse>('/wallet/prefund/check');
+    try {
+      return await this.makeRequest<PrefundCheckResponse>('/wallet/entrypoint/status');
+    } catch (error) {
+      const trackedError = error instanceof Error ? error.message : 'Unknown prefund error';
+      console.warn('[ApiClient] Prefund check error tracked:', trackedError);
+      return {
+        hasPrefund: false,
+        message: trackedError,
+        error: trackedError,
+      };
+    }
   }
 
   // Revoke delegated key access
@@ -217,6 +240,109 @@ class ApiClient {
     return this.makeRequest<RevokeKeyResponse>('/wallet/revoke', {
       method: 'POST',
       body: JSON.stringify({ delegatedEOA }),
+    });
+  }
+
+  // Health check
+  async healthCheck(): Promise<{ status: string; timestamp: string; message: string }> {
+    return this.makeRequest('/wallet/health');
+  }
+
+  // CallPolicy data fetching
+  async fetchCallPolicyPermissions(params: {
+    kernelAddress: string;
+    delegatedEOA: string;
+    permissionId: string;
+  }): Promise<{
+    success: boolean;
+    permissions: any[];
+    count: number;
+    message: string;
+  }> {
+    return this.makeRequest('/wallet/callpolicy/fetch', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async checkPermissionExists(params: {
+    kernelAddress: string;
+    delegatedEOA: string;
+    permissionId: string;
+    callType: number;
+    target: string;
+    selector: string;
+  }): Promise<{
+    success: boolean;
+    exists: boolean;
+    message: string;
+  }> {
+    return this.makeRequest('/wallet/callpolicy/check', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  // Get all permissions with daily usage for a policy
+  async getAllCallPolicyPermissionsWithUsage(params: {
+    policyId: string;
+    owner: string;
+  }): Promise<{
+    success: boolean;
+    permissions: Array<{
+      index: number;
+      permissionHash: string;
+      callType: number;
+      target: string;
+      selector: string;
+      valueLimit: string;
+      dailyLimit: string;
+      rules: any[];
+      dailyUsage: string;
+    }>;
+    message: string;
+  }> {
+    return this.makeRequest('/wallet/callpolicy/all-permissions-with-usage', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  // Get today's daily usage for a specific permission
+  async getCallPolicyDailyUsageToday(params: {
+    policyId: string;
+    wallet: string;
+    permissionHash: string;
+  }): Promise<{
+    success: boolean;
+    dailyUsage: string;
+    message: string;
+  }> {
+    return this.makeRequest('/wallet/callpolicy/daily-usage-today', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async regeneratePermissionId(params: {
+    kernelAddress: string;
+    delegatedEOA: string;
+  }): Promise<{
+    success: boolean;
+    permissionId: string;
+    vId: string;
+    message: string;
+  }> {
+    return this.makeRequest('/wallet/callpolicy/regenerate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async depositToEntryPoint(amountEth: string): Promise<EntryPointDepositResponse> {
+    return this.makeRequest<EntryPointDepositResponse>('/wallet/entrypoint/deposit', {
+      method: 'POST',
+      body: JSON.stringify({ amountEth }),
     });
   }
 }

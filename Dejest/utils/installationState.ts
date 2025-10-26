@@ -93,6 +93,10 @@ class InstallationStateManager {
 
   // Handle status updates from WebSocket
   private handleStatusUpdate(status: InstallationStatus) {
+    console.log('[InstallationState] Received WebSocket status:', status);
+    console.log('[InstallationState] Status includes permissionId:', status.permissionId);
+    console.log('[InstallationState] Status includes vId:', status.vId);
+    
     this.updateState({
       status,
       progress: status.progress,
@@ -111,14 +115,34 @@ class InstallationStateManager {
   // Handle installation completion
   private async handleInstallationComplete() {
     console.log('[InstallationState] Installation completed!');
+    console.log('[InstallationState] Current status:', this.state.status);
+    console.log('[InstallationState] Device ID:', this.state.deviceId);
     
     try {
       // Update the delegated key in storage to completed status
-      if (this.state.deviceId) {
-        await updateDelegatedKey(this.state.deviceId, {
+      if (this.state.deviceId && this.state.status) {
+        const updateData: any = {
           installationStatus: 'completed',
           installationProgress: undefined,
-        });
+        };
+        
+        // Add permissionId and vId if they exist in the status
+        if (this.state.status.permissionId) {
+          updateData.permissionId = this.state.status.permissionId;
+          console.log('[InstallationState] Adding permissionId to update:', this.state.status.permissionId);
+        } else {
+          console.log('[InstallationState] No permissionId in status');
+        }
+        if (this.state.status.vId) {
+          updateData.vId = this.state.status.vId;
+          console.log('[InstallationState] Adding vId to update:', this.state.status.vId);
+        } else {
+          console.log('[InstallationState] No vId in status');
+        }
+        
+        console.log('[InstallationState] Update data:', updateData);
+        await updateDelegatedKey(this.state.deviceId, updateData);
+        console.log('[InstallationState] Updated delegated key with permissionId:', this.state.status.permissionId, 'vId:', this.state.status.vId);
       }
 
       this.updateState({

@@ -31,8 +31,14 @@ export interface WatchPermissionData {
   createdAt: string;
 }
 
+export interface TargetAddress {
+  name: string;
+  address: string;
+}
+
 export interface WatchGenarteKeyData {
   kernelAddress: string;
+  whitelist?: TargetAddress[]; // Optional whitelist of receivers
 }
 
 
@@ -88,7 +94,7 @@ export const smartWatchBridge = {
     console.log("WalletBridge", WalletBridge);
     if (Platform.OS === 'ios' && WalletBridge?.generateKeyPair) {
       try {
-        console.log('[ReactNative] -> Generating key pair on smart watch with kernelAddress:', data);
+        console.log('[ReactNative] -> Generating key pair on smart watch with data:', data);
         const response = await WalletBridge.generateKeyPair(data);
         console.log('[ReactNative] -> Key pair generated on smart watch:', response);
         

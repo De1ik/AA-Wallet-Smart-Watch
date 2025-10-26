@@ -7,6 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, InstallationStatus, removeStuckInstallations, clearAllDelegatedKeys, updateDelegatedKey } from '@/utils/delegatedKeys';
 import { apiClient } from '@/utils/apiClient';
 import { installationState, GlobalInstallationState } from '@/utils/installationState';
+import { getKernelAddress } from '@/utils/config';
 
 export default function SmartWatchScreen() {
   const [connectedDevices, setConnectedDevices] = useState<DelegatedKeyData[]>([]);
@@ -21,6 +22,11 @@ export default function SmartWatchScreen() {
   const [selectedAddress, setSelectedAddress] = useState('');
   const [ongoingInstallation, setOngoingInstallation] = useState<DelegatedKeyData | null>(null);
   const [globalInstallationState, setGlobalInstallationState] = useState<GlobalInstallationState>(installationState.getState());
+  const [showRestrictionsModal, setShowRestrictionsModal] = useState(false);
+  const [selectedDeviceForRestrictions, setSelectedDeviceForRestrictions] = useState<DelegatedKeyData | null>(null);
+  const [isRefreshingFromContract, setIsRefreshingFromContract] = useState(false);
+
+  // Load delegated keys on component mount and when focused
 
   // Load delegated keys on component mount and when focused
   useEffect(() => {
@@ -138,6 +144,154 @@ export default function SmartWatchScreen() {
   const handleCloseDeviceDetails = () => {
     setShowDeviceDetails(false);
     setSelectedDeviceForDetails(null);
+  };
+
+  const handleViewRestrictions = (device: DelegatedKeyData) => {
+    setSelectedDeviceForRestrictions(device);
+    setShowRestrictionsModal(true);
+  };
+
+  const handleCloseRestrictions = () => {
+    setShowRestrictionsModal(false);
+    setSelectedDeviceForRestrictions(null);
+  };
+
+  const handleRefreshFromContract = async () => {
+    if (!selectedDeviceForRestrictions) return;
+    
+    try {
+      setIsRefreshingFromContract(true);
+      console.log('[Restrictions] Refreshing data from contract...');
+      console.log('[Restrictions] Device data:', selectedDeviceForRestrictions);
+      console.log('[Restrictions] Using permissionId:', selectedDeviceForRestrictions.permissionId);
+      console.log('[Restrictions] Using vId:', selectedDeviceForRestrictions.vId);
+      console.log('[Restrictions] Delegated EOA:', selectedDeviceForRestrictions.publicAddress);
+      
+      const kernelAddress = getKernelAddress() || '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+      console.log('[Restrictions] Kernel address:', kernelAddress);
+      
+      // If permissionId is empty, try to regenerate it
+      let permissionIdToUse = selectedDeviceForRestrictions.permissionId;
+      if (!permissionIdToUse || permissionIdToUse === '') {
+        console.log('[Restrictions] PermissionId is empty, attempting to regenerate...');
+        // Call server to regenerate permissionId
+        try {
+          const regenerateResponse = await apiClient.regeneratePermissionId({
+            kernelAddress,
+            delegatedEOA: selectedDeviceForRestrictions.publicAddress
+          });
+          if (regenerateResponse.success) {
+            permissionIdToUse = regenerateResponse.permissionId;
+            console.log('[Restrictions] Regenerated permissionId:', permissionIdToUse);
+            
+            // Update the device data with the regenerated permissionId
+            await updateDelegatedKey(selectedDeviceForRestrictions.id, {
+              permissionId: permissionIdToUse,
+              vId: regenerateResponse.vId
+            });
+            
+            // Update the selected device for display
+            setSelectedDeviceForRestrictions({
+              ...selectedDeviceForRestrictions,
+              permissionId: permissionIdToUse,
+              vId: regenerateResponse.vId
+            });
+          }
+        } catch (regenerateError) {
+          console.log('[Restrictions] Failed to regenerate permissionId:', regenerateError);
+        }
+      }
+      
+      // Try to fetch permissions with daily usage data first
+      try {
+        const usageResponse = await apiClient.getAllCallPolicyPermissionsWithUsage({
+          policyId: permissionIdToUse,
+          owner: kernelAddress
+        });
+        
+        if (usageResponse.success) {
+          console.log('[Restrictions] Contract data with usage fetched:', usageResponse.permissions);
+          
+          // Convert the response to match our CallPolicyPermission interface
+          const convertedPermissions = usageResponse.permissions.map(perm => ({
+            callType: perm.callType || 0, // Use decoded callType from API
+            target: perm.target || '0x0000000000000000000000000000000000000000', // Use decoded target from API
+            selector: perm.selector || '0x00000000', // Use decoded selector from API
+            valueLimit: perm.valueLimit,
+            dailyLimit: perm.dailyLimit,
+            rules: perm.rules,
+            dailyUsage: perm.dailyUsage // Add daily usage info
+          }));
+          
+          // Update the device data with fresh contract data including usage
+          const updatedDevice = {
+            ...selectedDeviceForRestrictions,
+            callPolicyPermissions: convertedPermissions
+          };
+          
+          // Update local storage
+          await updateDelegatedKey(selectedDeviceForRestrictions.id, {
+            callPolicyPermissions: convertedPermissions
+          });
+          
+          // Update the selected device for display
+          setSelectedDeviceForRestrictions(updatedDevice);
+          
+          // Reload the full list
+          await loadDelegatedKeys();
+          
+          Alert.alert(
+            'Data Refreshed',
+            `Successfully fetched ${usageResponse.permissions.length} permissions with daily usage from the smart contract.`,
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      } catch (usageError) {
+        console.log('[Restrictions] Failed to fetch usage data, falling back to regular fetch:', usageError);
+      }
+      
+      // Fallback to regular fetch if usage endpoint fails
+      const response = await apiClient.fetchCallPolicyPermissions({
+        kernelAddress,
+        delegatedEOA: selectedDeviceForRestrictions.publicAddress,
+        permissionId: permissionIdToUse
+      });
+      
+      if (response.success) {
+        console.log('[Restrictions] Contract data fetched:', response.permissions);
+        
+        // Update the device data with fresh contract data
+        const updatedDevice = {
+          ...selectedDeviceForRestrictions,
+          callPolicyPermissions: response.permissions
+        };
+        
+        // Update local storage
+        await updateDelegatedKey(selectedDeviceForRestrictions.id, {
+          callPolicyPermissions: response.permissions
+        });
+        
+        // Update the selected device for display
+        setSelectedDeviceForRestrictions(updatedDevice);
+        
+        // Reload the full list
+        await loadDelegatedKeys();
+        
+        Alert.alert(
+          'Data Refreshed',
+          `Successfully fetched ${response.count} permissions from the smart contract.`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Error', 'Failed to fetch data from contract');
+      }
+    } catch (error: any) {
+      console.error('[Restrictions] Error refreshing from contract:', error);
+      Alert.alert('Error', `Failed to refresh data: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsRefreshingFromContract(false);
+    }
   };
 
   const handleRevokeFromDetails = (device: DelegatedKeyData) => {
@@ -563,6 +717,14 @@ export default function SmartWatchScreen() {
                         >
                           <IconSymbol name="eye" size={16} color="#8B5CF6" />
                         </TouchableOpacity>
+                        {device.keyType === 'restricted' && (
+                          <TouchableOpacity
+                            style={styles.viewRestrictionsButton}
+                            onPress={() => handleViewRestrictions(device)}
+                          >
+                            <IconSymbol name="shield.checkered" size={16} color="#8B5CF6" />
+                          </TouchableOpacity>
+                        )}
                       </View>
                     </View>
                     
@@ -901,6 +1063,254 @@ export default function SmartWatchScreen() {
                 </View>
               </View>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Restrictions Modal */}
+      <Modal
+        visible={showRestrictionsModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={handleCloseRestrictions}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.restrictionsModal}>
+            <View style={styles.restrictionsModalHeader}>
+              <Text style={styles.restrictionsModalTitle}>Delegated Key Restrictions</Text>
+              <View style={styles.restrictionsHeaderButtons}>
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={handleCloseRestrictions}
+                >
+                  <IconSymbol name="xmark" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+            </View>
+            
+            {selectedDeviceForRestrictions && (
+              <ScrollView style={styles.restrictionsContent}>
+                <View style={styles.restrictionsSection}>
+                  <Text style={styles.restrictionsSectionTitle}>Device Information</Text>
+                  <View style={styles.restrictionsItem}>
+                    <Text style={styles.restrictionsLabel}>Device Name:</Text>
+                    <Text style={styles.restrictionsValue}>{selectedDeviceForRestrictions.deviceName}</Text>
+                  </View>
+                  <View style={styles.restrictionsItem}>
+                    <Text style={styles.restrictionsLabel}>Public Address:</Text>
+                    <Text style={styles.restrictionsValue}>{selectedDeviceForRestrictions.publicAddress}</Text>
+                  </View>
+                  <View style={styles.restrictionsItem}>
+                    <Text style={styles.restrictionsLabel}>Key Type:</Text>
+                    <Text style={styles.restrictionsValue}>
+                      {selectedDeviceForRestrictions.keyType === 'restricted' ? 'Restricted Access' : 'Sudo Access'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Refresh from Contract Button */}
+                {selectedDeviceForRestrictions.keyType === 'restricted' && (
+                  <View style={styles.refreshButtonContainer}>
+                    <TouchableOpacity
+                      style={styles.refreshFromContractButton}
+                      onPress={handleRefreshFromContract}
+                      disabled={isRefreshingFromContract}
+                    >
+                      {isRefreshingFromContract ? (
+                        <ActivityIndicator size="small" color="#8B5CF6" />
+                      ) : (
+                        <IconSymbol name="arrow.clockwise" size={16} color="#8B5CF6" />
+                      )}
+                      <Text style={styles.refreshFromContractText}>
+                        {isRefreshingFromContract ? 'Refreshing...' : 'Refresh from Contract'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {selectedDeviceForRestrictions.keyType === 'restricted' && selectedDeviceForRestrictions.callPolicyPermissions && (
+                  <>
+                    {/* Allowed Target Addresses */}
+                    <View style={styles.restrictionsSection}>
+                      <Text style={styles.restrictionsSectionTitle}>Allowed Target Addresses</Text>
+                      {selectedDeviceForRestrictions.callPolicyPermissions.length > 0 ? (
+                        <View style={styles.restrictionsList}>
+                          {Array.from(new Set(selectedDeviceForRestrictions.callPolicyPermissions.map(p => p.target))).map((target, index) => (
+                            <View key={index} style={styles.restrictionsListItem}>
+                              <IconSymbol name="building.2" size={16} color="#10B981" />
+                              <Text style={styles.restrictionsListItemText}>{target}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      ) : (
+                        <Text style={styles.restrictionsEmpty}>No target addresses configured</Text>
+                      )}
+                    </View>
+
+                    {/* Detailed Permissions */}
+                    <View style={styles.restrictionsSection}>
+                      <Text style={styles.restrictionsSectionTitle}>Detailed Permissions</Text>
+                      {selectedDeviceForRestrictions.callPolicyPermissions.length > 0 ? (
+                        <View style={styles.permissionsList}>
+                          {selectedDeviceForRestrictions.callPolicyPermissions.map((permission, index) => {
+                            let actionName = 'Unknown Action';
+                            let actionDescription = '';
+                            
+                            if (permission.selector === '0x00000000') {
+                              actionName = 'ETH Transfer';
+                              actionDescription = 'Send ETH to any address';
+                            } else if (permission.selector === '0xa9059cbb') {
+                              actionName = 'ERC20 Transfer';
+                              actionDescription = 'Send ERC20 tokens to any address';
+                            } else if (permission.selector === '0x095ea7b3') {
+                              actionName = 'Approve';
+                              actionDescription = 'Approve token spending';
+                            } else if (permission.selector === '0x7ff36ab5') {
+                              actionName = 'Swap';
+                              actionDescription = 'Execute token swaps';
+                            } else if (permission.selector === '0x379607f5') {
+                              actionName = 'Claim Rewards';
+                              actionDescription = 'Claim staking rewards';
+                            } else if (permission.selector === '0x47e7ef24') {
+                              actionName = 'Deposit';
+                              actionDescription = 'Deposit tokens to contracts';
+                            } else if (permission.selector === '0x2e1a7d4d') {
+                              actionName = 'Withdraw';
+                              actionDescription = 'Withdraw tokens from contracts';
+                            }
+
+                            const valueLimitEth = parseFloat(permission.valueLimit) / 1e18;
+                            const dailyLimitEth = parseFloat(permission.dailyLimit) / 1e18;
+                            const dailyUsageEth = permission.dailyUsage ? parseFloat(permission.dailyUsage) / 1e18 : 0;
+                            const callTypeText = permission.callType === 0 ? 'Single Call' : 'Delegate Call';
+                            
+                            return (
+                              <View key={index} style={styles.permissionItem}>
+                                <View style={styles.permissionHeader}>
+                                  <IconSymbol name="checkmark.circle.fill" size={18} color="#10B981" />
+                                  <Text style={styles.permissionTitle}>{actionName}</Text>
+                                </View>
+                                
+                                <View style={styles.permissionDetails}>
+                                  <View style={styles.permissionDetailRow}>
+                                    <Text style={styles.permissionDetailLabel}>Target Contract:</Text>
+                                    <Text style={styles.permissionDetailValue}>{permission.target}</Text>
+                                  </View>
+                                  
+                                  <View style={styles.permissionDetailRow}>
+                                    <Text style={styles.permissionDetailLabel}>Function Selector:</Text>
+                                    <Text style={styles.permissionDetailValue}>{permission.selector}</Text>
+                                  </View>
+                                  
+                                  <View style={styles.permissionDetailRow}>
+                                    <Text style={styles.permissionDetailLabel}>Call Type:</Text>
+                                    <Text style={styles.permissionDetailValue}>{callTypeText}</Text>
+                                  </View>
+                                  
+                                  <View style={styles.permissionDetailRow}>
+                                    <Text style={styles.permissionDetailLabel}>Max Value per Transaction:</Text>
+                                    <Text style={styles.permissionDetailValue}>{valueLimitEth} ETH</Text>
+                                  </View>
+                                  
+                                  <View style={styles.permissionDetailRow}>
+                                    <Text style={styles.permissionDetailLabel}>Max Value per Day:</Text>
+                                    <Text style={styles.permissionDetailValue}>{dailyLimitEth} ETH</Text>
+                                  </View>
+                                  
+                                  {permission.dailyUsage && (
+                                    <View style={styles.permissionDetailRow}>
+                                      <Text style={styles.permissionDetailLabel}>Today's Usage:</Text>
+                                      <Text style={[
+                                        styles.permissionDetailValue,
+                                        dailyUsageEth >= dailyLimitEth ? styles.usageExceeded : styles.usageNormal
+                                      ]}>
+                                        {dailyUsageEth} ETH
+                                        {dailyUsageEth >= dailyLimitEth && ' (LIMIT EXCEEDED)'}
+                                      </Text>
+                                    </View>
+                                  )}
+                                  
+                                  {permission.rules && permission.rules.length > 0 && (
+                                    <View style={styles.permissionDetailRow}>
+                                      <Text style={styles.permissionDetailLabel}>Parameter Rules:</Text>
+                                      <View style={styles.rulesList}>
+                                        {permission.rules.map((rule, ruleIndex) => (
+                                          <Text key={ruleIndex} style={styles.ruleText}>
+                                            • {rule.condition} at offset {rule.offset}
+                                          </Text>
+                                        ))}
+                                      </View>
+                                    </View>
+                                  )}
+                                  
+                                  <View style={styles.permissionDetailRow}>
+                                    <Text style={styles.permissionDetailLabel}>Description:</Text>
+                                    <Text style={styles.permissionDetailValue}>{actionDescription}</Text>
+                                  </View>
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <Text style={styles.restrictionsEmpty}>No permissions configured</Text>
+                      )}
+                    </View>
+
+                    {/* Summary Statistics */}
+                    <View style={styles.restrictionsSection}>
+                      <Text style={styles.restrictionsSectionTitle}>Summary</Text>
+                      <View style={styles.summaryGrid}>
+                        <View style={styles.summaryItem}>
+                          <Text style={styles.summaryLabel}>Total Permissions</Text>
+                          <Text style={styles.summaryValue}>{selectedDeviceForRestrictions.callPolicyPermissions.length}</Text>
+                        </View>
+                        <View style={styles.summaryItem}>
+                          <Text style={styles.summaryLabel}>Unique Targets</Text>
+                          <Text style={styles.summaryValue}>
+                            {Array.from(new Set(selectedDeviceForRestrictions.callPolicyPermissions.map(p => p.target))).length}
+                          </Text>
+                        </View>
+                        <View style={styles.summaryItem}>
+                          <Text style={styles.summaryLabel}>Unique Actions</Text>
+                          <Text style={styles.summaryValue}>
+                            {Array.from(new Set(selectedDeviceForRestrictions.callPolicyPermissions.map(p => p.selector))).length}
+                          </Text>
+                        </View>
+                        <View style={styles.summaryItem}>
+                          <Text style={styles.summaryLabel}>Max Transaction Value</Text>
+                          <Text style={styles.summaryValue}>
+                            {Math.max(...selectedDeviceForRestrictions.callPolicyPermissions.map(p => parseFloat(p.valueLimit) / 1e18))} ETH
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </>
+                )}
+
+                {selectedDeviceForRestrictions.keyType === 'sudo' && (
+                  <View style={styles.restrictionsSection}>
+                    <Text style={styles.restrictionsSectionTitle}>Sudo Access</Text>
+                    <View style={styles.restrictionsItem}>
+                      <IconSymbol name="exclamationmark.triangle.fill" size={20} color="#EF4444" />
+                      <Text style={styles.restrictionsWarningText}>
+                        This delegated key has full access to all wallet functions. No restrictions are applied.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+            
+            {/* Close Button */}
+            <View style={styles.restrictionsModalFooter}>
+              <TouchableOpacity
+                style={styles.closeModalButton}
+                onPress={handleCloseRestrictions}
+              >
+                <Text style={styles.closeModalButtonText}>Close</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1446,6 +1856,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#333333',
   },
+  viewRestrictionsButton: {
+    padding: 6,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
   dateSection: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1622,5 +2039,230 @@ const styles = StyleSheet.create({
   },
   clearAllButtonText: {
     color: '#FFFFFF',
+  },
+  
+  // Restrictions Modal Styles
+  restrictionsModal: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    margin: 20,
+    maxHeight: '80%',
+    width: '90%',
+    alignSelf: 'center',
+  },
+  restrictionsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333333',
+  },
+  restrictionsHeaderButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  refreshFromContractButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A1A1A',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#8B5CF6',
+    gap: 6,
+  },
+  refreshFromContractText: {
+    color: '#8B5CF6',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  refreshButtonContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#1A1A1A',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#333333',
+  },
+  restrictionsModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  restrictionsContent: {
+    maxHeight: 400,
+    padding: 20,
+  },
+  restrictionsSection: {
+    marginBottom: 24,
+  },
+  restrictionsSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 12,
+  },
+  restrictionsItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  restrictionsLabel: {
+    fontSize: 14,
+    color: '#CCCCCC',
+    fontWeight: '500',
+    minWidth: 120,
+  },
+  restrictionsValue: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  restrictionsList: {
+    gap: 8,
+  },
+  restrictionsListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#0F0F0F',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+    gap: 8,
+  },
+  restrictionsListItemText: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  restrictionsSelectorText: {
+    fontSize: 12,
+    color: '#666666',
+    fontFamily: 'monospace',
+  },
+  restrictionsEmpty: {
+    fontSize: 14,
+    color: '#666666',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    padding: 20,
+  },
+  restrictionsWarningText: {
+    fontSize: 14,
+    color: '#EF4444',
+    marginLeft: 8,
+    flex: 1,
+  },
+  
+  // Enhanced Permission Styles
+  permissionsList: {
+    gap: 16,
+  },
+  permissionItem: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  permissionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  permissionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  permissionDetails: {
+    gap: 8,
+  },
+  permissionDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  permissionDetailLabel: {
+    fontSize: 13,
+    color: '#CCCCCC',
+    fontWeight: '500',
+    minWidth: 140,
+    marginRight: 8,
+  },
+  permissionDetailValue: {
+    fontSize: 13,
+    color: '#FFFFFF',
+    flex: 1,
+    fontFamily: 'monospace',
+  },
+  usageNormal: {
+    color: '#10B981', // Green for normal usage
+  },
+  usageExceeded: {
+    color: '#EF4444', // Red for exceeded usage
+    fontWeight: 'bold',
+  },
+  rulesList: {
+    marginTop: 4,
+    marginLeft: 8,
+  },
+  ruleText: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    marginBottom: 2,
+  },
+  
+  // Summary Grid Styles
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  summaryItem: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 8,
+    padding: 12,
+    flex: 1,
+    minWidth: '45%',
+    alignItems: 'center',
+  },
+  summaryLabel: {
+    fontSize: 12,
+    color: '#CCCCCC',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  summaryValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10B981',
+    textAlign: 'center',
+  },
+  
+  // Modal Footer Styles
+  restrictionsModalFooter: {
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#333333',
+    backgroundColor: '#1A1A1A',
+  },
+  closeModalButton: {
+    backgroundColor: '#8B5CF6',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  closeModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

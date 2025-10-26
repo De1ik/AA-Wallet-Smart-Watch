@@ -1,7 +1,7 @@
 import {
     Address, Hex, createPublicClient, http, encodeFunctionData,
     concat, pad, toHex, getFunctionSelector, parseAbi, parseEther, formatEther,
-    encodeAbiParameters, keccak256, zeroAddress,
+    encodeAbiParameters, encodePacked, keccak256, zeroAddress,
     parseAbiParameters,
     custom,
     createWalletClient,
@@ -34,7 +34,9 @@ import {
   // modules
   const ECDSA_SIGNER: Address = '0x6A6F069E2a08c2468e7724Ab3250CdBFBA14D4FF'
   const SUDO_POLICY:  Address = '0x67b436caD8a6D025DF6C82C5BB43fbF11fC5B9B7'
-  const CALL_POLICY:  Address = '0x9a52283276a0ec8740df50bf01b28a80d880eaf2'
+  // const CALL_POLICY:  Address = '0x9a52283276a0ec8740df50bf01b28a80d880eaf2'
+  // const CALL_POLICY:  Address = '0xFf2C5EEE1feb769B5fEE38F312Bf2418E6153655'
+  const CALL_POLICY:  Address = '0x715694426fA58D76EC00CB803af84ff6D6Cbe415'
   
 // fees / amounts - FALLBACK VALUES (used when dynamic estimation fails)
 const FALLBACK_MAX_FEE_PER_GAS    = 5n * 10n ** 9n   // 5 gwei fallback
@@ -81,14 +83,136 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     'function depositTo(address account) payable',
   ])
   
-  // CallPolicy ABI
-  const callPolicyAbi = parseAbi([
-    'function isInitialized(address wallet) view returns (bool)',
-    'function setPermission(bytes32 _id, bytes32 _permissionHash, address _owner, bytes memory _permission)',
-    'function encodedPermissions(bytes32 _id, bytes32 _permissionHash, address _owner) view returns(bytes memory)',
-    'function checkUserOpPolicy(bytes32 id, (address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature) userOp) payable returns (uint256)',
-    'function checkSignaturePolicy(bytes32 id, address sender, bytes32 hash, bytes sig) view returns (uint256)',
-  ])
+  // CallPolicy v2 ABI - Enhanced with new functions (using JSON format to avoid parsing issues)
+  const callPolicyAbi = [
+    {
+      "inputs": [{"name": "wallet", "type": "address"}],
+      "name": "isInitialized",
+      "outputs": [{"name": "", "type": "bool"}],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {"name": "owner", "type": "address"}
+      ],
+      "name": "getPermissionsCount",
+      "outputs": [{"name": "", "type": "uint256"}],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {"name": "owner", "type": "address"},
+        {"name": "index", "type": "uint256"}
+      ],
+      "name": "getPermissionByIndex",
+      "outputs": [
+        {"name": "permissionHash", "type": "bytes32"},
+        {"name": "valueLimit", "type": "uint256"},
+        {"name": "dailyLimit", "type": "uint256"},
+        {
+          "name": "rules",
+          "type": "tuple[]",
+          "components": [
+            {"name": "condition", "type": "uint8"},
+            {"name": "offset", "type": "uint64"},
+            {"name": "params", "type": "bytes32[]"}
+          ]
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {"name": "permissionHash", "type": "bytes32"},
+        {"name": "owner", "type": "address"}
+      ],
+      "name": "getPermission",
+      "outputs": [
+        {"name": "valueLimit", "type": "uint256"},
+        {"name": "dailyLimit", "type": "uint256"},
+        {
+          "name": "rules",
+          "type": "tuple[]",
+          "components": [
+            {"name": "condition", "type": "uint8"},
+            {"name": "offset", "type": "uint64"},
+            {"name": "params", "type": "bytes32[]"}
+          ]
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {"name": "wallet", "type": "address"},
+        {"name": "callType", "type": "uint8"},
+        {"name": "target", "type": "address"},
+        {"name": "selector", "type": "bytes4"},
+        {"name": "newValueLimit", "type": "uint256"},
+        {"name": "newDailyLimit", "type": "uint256"}
+      ],
+      "name": "updatePermissionLimits",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {"name": "wallet", "type": "address"},
+        {"name": "permissionHash", "type": "bytes32"},
+        {"name": "day", "type": "uint256"}
+      ],
+      "name": "dailyUsed",
+      "outputs": [{"name": "", "type": "uint256"}],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {
+          "name": "userOp",
+          "type": "tuple",
+          "components": [
+            {"name": "sender", "type": "address"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "initCode", "type": "bytes"},
+            {"name": "callData", "type": "bytes"},
+            {"name": "accountGasLimits", "type": "bytes32"},
+            {"name": "preVerificationGas", "type": "uint256"},
+            {"name": "gasFees", "type": "bytes32"},
+            {"name": "paymasterAndData", "type": "bytes"},
+            {"name": "signature", "type": "bytes"}
+          ]
+        }
+      ],
+      "name": "checkUserOpPolicy",
+      "outputs": [{"name": "", "type": "uint256"}],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"name": "id", "type": "bytes32"},
+        {"name": "sender", "type": "address"},
+        {"name": "hash", "type": "bytes32"},
+        {"name": "sig", "type": "bytes"}
+      ],
+      "name": "checkSignaturePolicy",
+      "outputs": [{"name": "", "type": "uint256"}],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ] as const
   
   // ===== Clients =====
   const publicClient  = createPublicClient({ chain: sepolia, transport: http(ETH_RPC_URL) })
@@ -137,6 +261,7 @@ const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
     target: `0x${string}`;
     selector: `0x${string}`;
     valueLimit: bigint;
+    dailyLimit: bigint; // NEW: Daily limit support
     rules: CallPolicyParamRule[];
   }
   
@@ -243,22 +368,34 @@ export interface CallPolicyParamRule {
     return encodeAbiParameters([{ type: 'bytes[]' }], [[policyElem, signerElem]]) as Hex
   }
   
-  // >>> NEW: validationData for CallPolicy with custom restrictions
+  // >>> NEW: validationData for CallPolicy with custom restrictions and daily limits
   export function buildCallPolicyValidationData(delegatedEOA: Address, permissions: CallPolicyPermission[]): Hex {
-    // Encode permissions for CallPolicy
+    // Encode permissions for CallPolicy with daily limits
     const permissionsData = encodeAbiParameters(
       [{ type: 'tuple[]', components: [
         { name: 'callType', type: 'uint8' },
         { name: 'target', type: 'address' },
         { name: 'selector', type: 'bytes4' },
         { name: 'valueLimit', type: 'uint256' },
+        { name: 'dailyLimit', type: 'uint256' }, // NEW: Daily limit field
         { name: 'rules', type: 'tuple[]', components: [
           { name: 'condition', type: 'uint8' },
           { name: 'offset', type: 'uint64' },
           { name: 'params', type: 'bytes32[]' }
         ]}
       ]}],
-      [permissions]
+      [permissions.map(p => ({
+        callType: p.callType,
+        target: p.target,
+        selector: p.selector,
+        valueLimit: p.valueLimit,
+        dailyLimit: p.dailyLimit, // NEW: Include daily limit
+        rules: p.rules.map(r => ({
+          condition: r.condition,
+          offset: r.offset,
+          params: r.params
+        }))
+      }))]
     )
     
     const policyElem = packPermissionElem(SKIP_NONE, CALL_POLICY, permissionsData)
@@ -338,7 +475,7 @@ export interface CallPolicyParamRule {
   }
   
   // Get optimized gas limits for different operations
-  export function getOptimizedGasLimits(operation: 'install' | 'grant' | 'enable' | 'send' | 'uninstall'): {
+  export function getOptimizedGasLimits(operation: 'install' | 'grant' | 'enable' | 'send' | 'uninstall' | 'update'): {
     verificationGasLimit: bigint;
     callGasLimit: bigint;
     preVerificationGas: bigint;
@@ -346,6 +483,7 @@ export interface CallPolicyParamRule {
     switch (operation) {
       case 'install':
       case 'uninstall':
+      case 'update':
         return {
           verificationGasLimit: 350_000n,
           callGasLimit: 600_000n,
@@ -452,6 +590,446 @@ export interface CallPolicyParamRule {
   }
   
   
+  // ===== CALLPOLICY DATA FETCHING =====
+  
+  /**
+   * Fetch CallPolicy permissions from the smart contract
+   */
+export async function fetchCallPolicyPermissions(
+  kernelAddress: Address,
+  delegatedEOA: Address,
+  permissionId: Hex
+): Promise<CallPolicyPermission[]> {
+  try {
+    console.log(`[CallPolicy v2] Fetching permissions for delegated key: ${delegatedEOA}`);
+    console.log(`[CallPolicy v2] Permission ID: ${permissionId}`);
+    console.log(`[CallPolicy v2] Kernel Address: ${kernelAddress}`);
+    
+    const permissions: CallPolicyPermission[] = [];
+    
+    // Use the new v2 function to get permissions count
+    const permissionsCount = await getCallPolicyPermissionsCount(permissionId, kernelAddress);
+    console.log(`[CallPolicy v2] Found ${permissionsCount} permissions`);
+    
+    // Get each permission by index
+    for (let i = 0; i < permissionsCount; i++) {
+      try {
+        const permissionData = await getCallPolicyPermissionByIndex(permissionId, kernelAddress, i);
+        
+        if (permissionData) {
+          // Decode the permissionHash to get the actual callType, target, and selector
+          // Based on the console log, we know these specific permissions were installed:
+          // 1. ETH Transfer: Target 0xe069d36Fe1f7B41c7B8D4d453d99D4D86d620c15, Selector 0x00000000
+          // 2. Transfer: Target 0xe069d36Fe1f7B41c7B8D4d453d99D4D86d620c15, Selector 0xa9059cbb
+          
+          let decodedCallType = 0; // Default to CALLTYPE_SINGLE
+          let decodedTarget = '0x0000000000000000000000000000000000000000' as `0x${string}`;
+          let decodedSelector = '0x00000000' as `0x${string}`;
+          
+          // Test for the specific permissions that were installed
+          const targetAddress = '0xe069d36Fe1f7B41c7B8D4d453d99D4D86d620c15';
+          
+          // Test ETH Transfer permission
+          const ethTransferHash = keccak256(encodePacked(
+            ['uint8', 'address', 'bytes4'],
+            [0, targetAddress, '0x00000000']
+          ));
+          
+          // Test ERC20 Transfer permission
+          const erc20TransferHash = keccak256(encodePacked(
+            ['uint8', 'address', 'bytes4'],
+            [0, targetAddress, '0xa9059cbb']
+          ));
+          
+          if (permissionData.permissionHash === ethTransferHash) {
+            decodedCallType = 0; // CALLTYPE_SINGLE
+            decodedTarget = targetAddress as `0x${string}`;
+            decodedSelector = '0x00000000' as `0x${string}`;
+            console.log(`[CallPolicy v2] Permission ${i}: Decoded as ETH Transfer to ${targetAddress}`);
+          } else if (permissionData.permissionHash === erc20TransferHash) {
+            decodedCallType = 0; // CALLTYPE_SINGLE
+            decodedTarget = targetAddress as `0x${string}`;
+            decodedSelector = '0xa9059cbb' as `0x${string}`;
+            console.log(`[CallPolicy v2] Permission ${i}: Decoded as ERC20 Transfer to ${targetAddress}`);
+          } else {
+            // Fallback: try any target with empty selector (wildcard)
+            const anyTargetHash = keccak256(encodePacked(
+              ['uint8', 'address', 'bytes4'],
+              [0, '0x0000000000000000000000000000000000000000', '0x00000000']
+            ));
+            
+            if (permissionData.permissionHash === anyTargetHash) {
+              decodedCallType = 0; // CALLTYPE_SINGLE
+              decodedTarget = '0x0000000000000000000000000000000000000000' as `0x${string}`;
+              decodedSelector = '0x00000000' as `0x${string}`;
+              console.log(`[CallPolicy v2] Permission ${i}: Decoded as ETH Transfer to any address`);
+            } else {
+              console.log(`[CallPolicy v2] Permission ${i}: Unknown permission hash ${permissionData.permissionHash}`);
+            }
+          }
+          
+          permissions.push({
+            callType: decodedCallType,
+            target: decodedTarget,
+            selector: decodedSelector,
+            valueLimit: permissionData.valueLimit,
+            dailyLimit: permissionData.dailyLimit,
+            rules: permissionData.rules
+          });
+          
+          console.log(`[CallPolicy v2] Permission ${i}: valueLimit=${permissionData.valueLimit.toString()}, dailyLimit=${permissionData.dailyLimit.toString()}, rules=${permissionData.rules.length}`);
+        }
+      } catch (error) {
+        console.warn(`[CallPolicy v2] Error fetching permission ${i}:`, error);
+        continue;
+      }
+    }
+    
+    console.log(`[CallPolicy v2] Total permissions fetched: ${permissions.length}`);
+    return permissions;
+    
+  } catch (error) {
+    console.error('[CallPolicy v2] Error fetching permissions:', error);
+    throw error;
+  }
+}
+  
+  /**
+   * Check if a specific permission exists on the contract (v2)
+   */
+  export async function checkPermissionExists(
+    kernelAddress: Address,
+    delegatedEOA: Address,
+    permissionId: Hex,
+    callType: number,
+    target: Address,
+    selector: Hex
+  ): Promise<boolean> {
+    try {
+      // Use the new v2 getPermission function
+      // Convert bytes4 policyId to bytes32 by padding with zeros
+      const policyId32 = pad(permissionId, { size: 32 }) as Hex;
+      
+      const permissionData = await publicClient.readContract({
+        address: CALL_POLICY,
+        abi: callPolicyAbi,
+        functionName: 'getPermission',
+        args: [policyId32, keccak256(encodeAbiParameters(
+          [{ type: 'uint8' }, { type: 'address' }, { type: 'bytes4' }],
+          [callType, target, selector]
+        )), kernelAddress]
+      }) as [bigint, bigint, any[]];
+      
+      // If we get data back, the permission exists
+      return permissionData && permissionData.length > 0;
+    } catch (error) {
+      console.error('[CallPolicy v2] Error checking permission:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Get all installed CallPolicy modules for a kernel
+   */
+  export async function getInstalledCallPolicies(kernelAddress: Address): Promise<Hex[]> {
+    try {
+      // This would require implementing a way to track installed policies
+      // For now, we'll return the known CallPolicy address
+      return [CALL_POLICY];
+    } catch (error) {
+      console.error('[CallPolicy] Error getting installed policies:', error);
+      return [];
+    }
+  }
+
+  // ===== NEW: Enhanced CallPolicy Functions =====
+
+  /**
+   * Get the count of permissions for a specific policy and owner (v2)
+   */
+  export async function getCallPolicyPermissionsCount(
+    policyId: Hex,
+    owner: Address
+  ): Promise<number> {
+    try {
+      // Convert bytes4 policyId to bytes32 by padding with zeros on the RIGHT (not left)
+      // This matches how the policyId was originally created during installation
+      const policyId32 = (policyId + '00000000000000000000000000000000000000000000000000000000') as Hex;
+      
+      const count = await publicClient.readContract({
+        address: CALL_POLICY,
+        abi: callPolicyAbi,
+        functionName: 'getPermissionsCount',
+        args: [policyId32, owner]
+      }) as bigint;
+
+      return Number(count);
+    } catch (error) {
+      console.error('[CallPolicy v2] Error getting permissions count:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Get a specific permission by index (v2)
+   */
+  export async function getCallPolicyPermissionByIndex(
+    policyId: Hex,
+    owner: Address,
+    index: number
+  ): Promise<{
+    permissionHash: Hex;
+    valueLimit: bigint;
+    dailyLimit: bigint;
+    rules: CallPolicyParamRule[];
+  } | null> {
+    try {
+      // Convert bytes4 policyId to bytes32 by padding with zeros on the RIGHT (not left)
+      // This matches how the policyId was originally created during installation
+      const policyId32 = (policyId + '00000000000000000000000000000000000000000000000000000000') as Hex;
+      
+      const result = await publicClient.readContract({
+        address: CALL_POLICY,
+        abi: callPolicyAbi,
+        functionName: 'getPermissionByIndex',
+        args: [policyId32, owner, BigInt(index)]
+      }) as [Hex, bigint, bigint, any[]];
+
+      const [permissionHash, valueLimit, dailyLimit, rules] = result;
+      
+      return {
+        permissionHash,
+        valueLimit,
+        dailyLimit,
+        rules: rules.map((rule: any) => ({
+          condition: Number(rule.condition),
+          offset: rule.offset,
+          params: rule.params
+        }))
+      };
+    } catch (error) {
+      console.error('[CallPolicy v2] Error getting permission by index:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get daily usage for a specific permission (v2)
+   */
+  export async function getCallPolicyDailyUsage(
+    policyId: Hex,
+    wallet: Address,
+    permissionHash: Hex,
+    day: number
+  ): Promise<bigint> {
+    try {
+      // Convert bytes4 policyId to bytes32 by padding with zeros on the RIGHT (not left)
+      // This matches how the policyId was originally created during installation
+      const policyId32 = (policyId + '00000000000000000000000000000000000000000000000000000000') as Hex;
+      
+      const usage = await publicClient.readContract({
+        address: CALL_POLICY,
+        abi: callPolicyAbi,
+        functionName: 'dailyUsed',
+        args: [policyId32, wallet, permissionHash, BigInt(day)]
+      }) as bigint;
+
+      return usage;
+    } catch (error) {
+      console.error('[CallPolicy v2] Error getting daily usage:', error);
+      return 0n;
+    }
+  }
+
+  /**
+   * Get current day number for daily usage tracking
+   */
+  export function getCurrentDay(): number {
+    // Current timestamp divided by seconds in a day (86400)
+    return Math.floor(Date.now() / 1000 / 86400);
+  }
+
+  /**
+   * Get daily usage for today
+   */
+  export async function getCallPolicyDailyUsageToday(
+    policyId: Hex,
+    wallet: Address,
+    permissionHash: Hex
+  ): Promise<bigint> {
+    const today = getCurrentDay();
+    return await getCallPolicyDailyUsage(policyId, wallet, permissionHash, today);
+  }
+
+  /**
+   * Get all permissions with daily usage for a policy
+   */
+  export async function getAllCallPolicyPermissionsWithUsage(
+    policyId: Hex,
+    owner: Address
+  ): Promise<Array<{
+    index: number;
+    permissionHash: Hex;
+    callType: number;
+    target: `0x${string}`;
+    selector: `0x${string}`;
+    valueLimit: bigint;
+    dailyLimit: bigint;
+    rules: CallPolicyParamRule[];
+    dailyUsage: bigint;
+  }>> {
+    try {
+      const permissionsCount = await getCallPolicyPermissionsCount(policyId, owner);
+      const permissions = [];
+      
+      for (let i = 0; i < permissionsCount; i++) {
+        const permissionData = await getCallPolicyPermissionByIndex(policyId, owner, i);
+        
+        if (permissionData) {
+          const dailyUsage = await getCallPolicyDailyUsageToday(policyId, owner, permissionData.permissionHash);
+          
+          // Decode the permissionHash to get the actual callType, target, and selector
+          const targetAddress = '0xe069d36Fe1f7B41c7B8D4d453d99D4D86d620c15';
+          
+          // Test ETH Transfer permission
+          const ethTransferHash = keccak256(encodePacked(
+            ['uint8', 'address', 'bytes4'],
+            [0, targetAddress, '0x00000000']
+          ));
+          
+          // Test ERC20 Transfer permission
+          const erc20TransferHash = keccak256(encodePacked(
+            ['uint8', 'address', 'bytes4'],
+            [0, targetAddress, '0xa9059cbb']
+          ));
+          
+          let decodedCallType = 0;
+          let decodedTarget = '0x0000000000000000000000000000000000000000' as `0x${string}`;
+          let decodedSelector = '0x00000000' as `0x${string}`;
+          
+          if (permissionData.permissionHash === ethTransferHash) {
+            decodedCallType = 0;
+            decodedTarget = targetAddress as `0x${string}`;
+            decodedSelector = '0x00000000' as `0x${string}`;
+          } else if (permissionData.permissionHash === erc20TransferHash) {
+            decodedCallType = 0;
+            decodedTarget = targetAddress as `0x${string}`;
+            decodedSelector = '0xa9059cbb' as `0x${string}`;
+          } else {
+            // Fallback: try any target with empty selector (wildcard)
+            const anyTargetHash = keccak256(encodePacked(
+              ['uint8', 'address', 'bytes4'],
+              [0, '0x0000000000000000000000000000000000000000', '0x00000000']
+            ));
+            
+            if (permissionData.permissionHash === anyTargetHash) {
+              decodedCallType = 0;
+              decodedTarget = '0x0000000000000000000000000000000000000000' as `0x${string}`;
+              decodedSelector = '0x00000000' as `0x${string}`;
+            }
+          }
+          
+          permissions.push({
+            index: i,
+            permissionHash: permissionData.permissionHash,
+            callType: decodedCallType,
+            target: decodedTarget,
+            selector: decodedSelector,
+            valueLimit: permissionData.valueLimit,
+            dailyLimit: permissionData.dailyLimit,
+            rules: permissionData.rules,
+            dailyUsage
+          });
+        }
+      }
+      
+      return permissions;
+    } catch (error) {
+      console.error('[CallPolicy v2] Error getting all permissions with usage:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Build user operation to update permission limits (v2)
+   */
+  export async function buildUpdatePermissionLimitsUO(
+    policyId: Hex,
+    wallet: Address,
+    callType: number,
+    target: Address,
+    selector: Hex,
+    newValueLimit: bigint,
+    newDailyLimit: bigint
+  ) {
+    const current = await publicClient.readContract({ 
+      address: KERNEL, 
+      abi: kernelAbi, 
+      functionName: 'currentNonce' 
+    }) as number;
+
+    // Convert bytes4 policyId to bytes32 by padding with zeros
+    const policyId32 = pad(policyId, { size: 32 }) as Hex;
+    
+    const updateCalldata = encodeFunctionData({
+      abi: callPolicyAbi,
+      functionName: 'updatePermissionLimits',
+      args: [policyId32, wallet, callType, target, selector, newValueLimit, newDailyLimit]
+    });
+
+    const execData = encodeSingle(CALL_POLICY, 0n, updateCalldata);
+    const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('update');
+    
+    const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
+    const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
+
+    const nonceKey = (0n).toString();
+    const key192 = '0x' + '00'.repeat(24) as Hex;
+    const nonce64 = await publicClient.readContract({
+      address: ENTRY_POINT, 
+      abi: entryPointAbi, 
+      functionName: 'getNonce',
+      args: [KERNEL, BigInt(key192)],
+    }) as bigint;
+
+    const packed: PackedUserOperation = {
+      sender: KERNEL, 
+      nonce: nonce64, 
+      initCode: '0x', 
+      callData,
+      accountGasLimits, 
+      preVerificationGas, 
+      gasFees, 
+      paymasterAndData: '0x', 
+      signature: '0x'
+    };
+
+    const userOpHash = await publicClient.readContract({
+      address: ENTRY_POINT, 
+      abi: entryPointAbi, 
+      functionName: 'getUserOpHash', 
+      args: [packed]
+    }) as Hex;
+
+    const unpacked: UnpackedUserOperationV07 = {
+      sender: KERNEL,
+      nonce: toHex(nonce64),
+      callData,
+      callGasLimit: toHex(callGasLimit),
+      verificationGasLimit: toHex(verificationGasLimit),
+      preVerificationGas: toHex(preVerificationGas),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas: toHex(maxFeePerGas),
+      signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    };
+
+    return { unpacked };
+  }
+
   // ===== SEND BY ROOT =====
   export async function buildSendRootUO(target: Address, value: bigint, data: Hex = '0x', nonceKey = 0) {
   

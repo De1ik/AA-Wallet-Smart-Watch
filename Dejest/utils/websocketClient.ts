@@ -70,13 +70,17 @@ export class WebSocketClient {
               
             case 'status_update':
               if (message.step && message.progress !== undefined) {
+                console.log('[WebSocketClient] Processing status_update:', message);
                 const status: InstallationStatus = {
                   step: message.step,
                   message: message.message || '',
                   progress: message.progress,
                   txHash: message.txHash,
-                  error: message.error
+                  error: message.error,
+                  permissionId: message.permissionId,
+                  vId: message.vId
                 };
+                console.log('[WebSocketClient] Created status object:', status);
                 this.onStatusUpdate?.(status);
               }
               break;

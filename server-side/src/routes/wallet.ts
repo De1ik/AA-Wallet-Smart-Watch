@@ -1,20 +1,28 @@
 // server/routes/wallet.ts
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { 
-  buildDelegatedSendUO, 
-  getPermissionId, 
-  getVId, 
-  sendUserOpV07, 
+import {
+  buildDelegatedSendUO,
+  getPermissionId,
+  getVId,
+  sendUserOpV07,
   UnpackedUserOperationV07,
   buildInstallPermissionUO,
   buildInstallCallPolicyUO,
   buildEnableSelectorUO,
   buildGrantAccessUO,
   buildUninstallPermissionUO,
+  buildDepositUserOp,
   getRootCurrentNonce,
   checkPrefund,
-  CallPolicyPermission
+  CallPolicyPermission,
+  getCallPolicyPermissionsCount,
+  getCallPolicyPermissionByIndex,
+  getCallPolicyDailyUsage,
+  getCallPolicyDailyUsageToday,
+  getAllCallPolicyPermissionsWithUsage,
+  getCurrentDay,
+  buildUpdatePermissionLimitsUO
 } from "../utils/native-code";
 import { parseEther } from 'viem';
 import { InstallationStatus } from "../services/websocket";
@@ -23,7 +31,15 @@ import { wsService } from "../index";
 const router = Router();
 
 // Helper function to check prefund status directly
-async function checkPrefundSimple(): Promise<{ hasPrefund: boolean; message: string }> {
+interface PrefundStatus {
+  hasPrefund: boolean;
+  message: string;
+  depositWei: string;
+  requiredPrefundWei: string;
+  shortfallWei: string;
+}
+
+async function checkPrefundSimple(): Promise<PrefundStatus> {
   try {
     const KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
     const ENTRY_POINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
@@ -60,20 +76,36 @@ async function checkPrefundSimple(): Promise<{ hasPrefund: boolean; message: str
     
     console.log(`[Prefund Check] Required prefund: ${finalRequiredPrefund.toString()} wei (${Number(finalRequiredPrefund) / 1e18} ETH)`);
     
+    const depositStr = deposit.toString();
+    const requiredStr = finalRequiredPrefund.toString();
+    const shortfall = deposit >= finalRequiredPrefund ? 0n : finalRequiredPrefund - deposit;
+    const shortfallStr = shortfall.toString();
+    
     if (deposit >= finalRequiredPrefund) {
-      return { hasPrefund: true, message: "Sufficient prefund available" };
+      return { 
+        hasPrefund: true, 
+        message: "Sufficient prefund available",
+        depositWei: depositStr,
+        requiredPrefundWei: requiredStr,
+        shortfallWei: shortfallStr
+      };
     } else {
-      const shortfall = finalRequiredPrefund - deposit;
       return { 
         hasPrefund: false, 
-        message: `Insufficient prefund: Account has ${deposit.toString()} wei but needs at least ${finalRequiredPrefund.toString()} wei deposited in EntryPoint. Shortfall: ${shortfall.toString()} wei`
+        message: `Insufficient prefund: Account has ${depositStr} wei but needs at least ${requiredStr} wei deposited in EntryPoint. Shortfall: ${shortfallStr} wei`,
+        depositWei: depositStr,
+        requiredPrefundWei: requiredStr,
+        shortfallWei: shortfallStr
       };
     }
   } catch (error: any) {
     console.error(`[Prefund Check] Error:`, error);
     return { 
       hasPrefund: false, 
-      message: `Prefund check failed: ${error.message}` 
+      message: `Prefund check failed: ${error.message}`,
+      depositWei: '0',
+      requiredPrefundWei: '0',
+      shortfallWei: '0'
     };
   }
 }
@@ -254,13 +286,19 @@ router.get("/prefund/check", async (_req: Request, res: Response) => {
     if (result.hasPrefund) {
       return res.json({
         hasPrefund: true,
-        message: result.message
+        message: result.message,
+        depositWei: result.depositWei,
+        requiredPrefundWei: result.requiredPrefundWei,
+        shortfallWei: result.shortfallWei
       });
     } else {
       return res.status(400).json({
         hasPrefund: false,
         error: "Insufficient prefund",
-        message: result.message
+        message: result.message,
+        depositWei: result.depositWei,
+        requiredPrefundWei: result.requiredPrefundWei,
+        shortfallWei: result.shortfallWei
       });
     }
   } catch (err: any) {
@@ -269,7 +307,615 @@ router.get("/prefund/check", async (_req: Request, res: Response) => {
       hasPrefund: false,
       error: "Prefund check failed",
       message: "Failed to check prefund status",
-      details: err?.message ?? "internal error"
+      details: err?.message ?? "internal error",
+      depositWei: '0',
+      requiredPrefundWei: '0',
+      shortfallWei: '0'
+    });
+  }
+});
+
+/**
+ * EntryPoint status (alias for prefund check with additional details)
+ */
+router.get("/entrypoint/status", async (_req: Request, res: Response) => {
+  try {
+    const result = await checkPrefundSimple();
+    return res.json(result);
+  } catch (err: any) {
+    console.error("[/entrypoint/status] error:", err);
+    return res.status(500).json({
+      hasPrefund: false,
+      message: "Failed to fetch EntryPoint status",
+      error: err?.message ?? "internal error",
+      depositWei: '0',
+      requiredPrefundWei: '0',
+      shortfallWei: '0'
+    });
+  }
+});
+
+/**
+ * Health check endpoint
+ */
+router.get("/health", async (_req: Request, res: Response) => {
+  try {
+    return res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      message: "Server is running"
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      status: "error",
+      message: err?.message ?? "Health check failed"
+    });
+  }
+});
+
+/**
+ * Fetch CallPolicy permissions from smart contract
+ */
+router.post("/callpolicy/fetch", async (req: Request, res: Response) => {
+  try {
+    const { kernelAddress, delegatedEOA, permissionId } = req.body;
+    
+    if (!kernelAddress || !delegatedEOA || !permissionId) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "kernelAddress, delegatedEOA, and permissionId are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/Fetch] Fetching permissions for:`, {
+      kernelAddress,
+      delegatedEOA,
+      permissionId
+    });
+    
+    const { fetchCallPolicyPermissions } = await import('../utils/native-code');
+    const permissions = await fetchCallPolicyPermissions(
+      kernelAddress as `0x${string}`,
+      delegatedEOA as `0x${string}`,
+      permissionId as `0x${string}`
+    );
+    
+    console.log(`[CallPolicy/Fetch] Found ${permissions.length} permissions`);
+    
+    // Convert BigInt values to strings for JSON serialization
+    const serializedPermissions = permissions.map(permission => ({
+      ...permission,
+      valueLimit: permission.valueLimit.toString(),
+      dailyLimit: permission.dailyLimit.toString(),
+      rules: permission.rules.map(rule => ({
+        ...rule,
+        offset: rule.offset.toString(),
+        params: rule.params
+      }))
+    }));
+    
+    return res.json({
+      success: true,
+      permissions: serializedPermissions,
+      count: serializedPermissions.length,
+      message: `Successfully fetched ${serializedPermissions.length} permissions from contract`
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/fetch] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch CallPolicy permissions",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Check if a specific permission exists on contract
+ */
+router.post("/callpolicy/check", async (req: Request, res: Response) => {
+  try {
+    const { kernelAddress, delegatedEOA, permissionId, callType, target, selector } = req.body;
+    
+    if (!kernelAddress || !delegatedEOA || !permissionId || callType === undefined || !target || !selector) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "All parameters are required: kernelAddress, delegatedEOA, permissionId, callType, target, selector"
+      });
+    }
+    
+    console.log(`[CallPolicy/Check] Checking permission:`, {
+      kernelAddress,
+      delegatedEOA,
+      permissionId,
+      callType,
+      target,
+      selector
+    });
+    
+    const { checkPermissionExists } = await import('../utils/native-code');
+    const exists = await checkPermissionExists(
+      kernelAddress as `0x${string}`,
+      delegatedEOA as `0x${string}`,
+      permissionId as `0x${string}`,
+      callType,
+      target as `0x${string}`,
+      selector as `0x${string}`
+    );
+    
+    return res.json({
+      success: true,
+      exists,
+      message: exists ? "Permission exists" : "Permission does not exist"
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/check] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to check permission",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+router.post("/callpolicy/regenerate", async (req: Request, res: Response) => {
+  try {
+    const { kernelAddress, delegatedEOA } = req.body;
+    
+    if (!kernelAddress || !delegatedEOA) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "kernelAddress and delegatedEOA are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/Regenerate] Regenerating permission ID for:`, {
+      kernelAddress,
+      delegatedEOA
+    });
+    
+    const { getPermissionId, getVId } = await import('../utils/native-code');
+    const permissionId = getPermissionId(delegatedEOA as `0x${string}`);
+    const vId = getVId(permissionId);
+    
+    console.log(`[CallPolicy/Regenerate] Generated permissionId:`, permissionId);
+    console.log(`[CallPolicy/Regenerate] Generated vId:`, vId);
+    
+    return res.json({
+      success: true,
+      permissionId,
+      vId,
+      message: 'Permission ID regenerated successfully'
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/regenerate] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to regenerate permission ID",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get permissions count for a specific policy and owner
+ */
+router.post("/callpolicy/count", async (req: Request, res: Response) => {
+  try {
+    const { policyId, owner } = req.body;
+    
+    if (!policyId || !owner) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "policyId and owner are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/Count] Getting permissions count for:`, {
+      policyId,
+      owner
+    });
+    
+    const count = await getCallPolicyPermissionsCount(
+      policyId as `0x${string}`,
+      owner as `0x${string}`
+    );
+    
+    return res.json({
+      success: true,
+      count,
+      message: `Found ${count} permissions`
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/count] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get permissions count",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get permission by index
+ */
+router.post("/callpolicy/get-by-index", async (req: Request, res: Response) => {
+  try {
+    const { policyId, owner, index } = req.body;
+    
+    if (!policyId || !owner || index === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "policyId, owner, and index are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/GetByIndex] Getting permission at index:`, {
+      policyId,
+      owner,
+      index
+    });
+    
+    const permission = await getCallPolicyPermissionByIndex(
+      policyId as `0x${string}`,
+      owner as `0x${string}`,
+      index
+    );
+    
+    if (!permission) {
+      return res.status(404).json({
+        success: false,
+        error: "Permission not found",
+        message: `No permission found at index ${index}`
+      });
+    }
+    
+    // Convert BigInt values to strings for JSON serialization
+    const serializedPermission = {
+      ...permission,
+      valueLimit: permission.valueLimit.toString(),
+      dailyLimit: permission.dailyLimit.toString(),
+      rules: permission.rules.map(rule => ({
+        ...rule,
+        offset: rule.offset.toString(),
+        params: rule.params
+      }))
+    };
+    
+    return res.json({
+      success: true,
+      permission: serializedPermission,
+      message: "Permission retrieved successfully"
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/get-by-index] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get permission by index",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get daily usage for a permission
+ */
+router.post("/callpolicy/daily-usage", async (req: Request, res: Response) => {
+  try {
+    const { policyId, wallet, permissionHash, day } = req.body;
+    
+    if (!policyId || !wallet || !permissionHash || day === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "policyId, wallet, permissionHash, and day are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/DailyUsage] Getting daily usage for:`, {
+      policyId,
+      wallet,
+      permissionHash,
+      day
+    });
+    
+    const usage = await getCallPolicyDailyUsage(
+      policyId as `0x${string}`,
+      wallet as `0x${string}`,
+      permissionHash as `0x${string}`,
+      day
+    );
+    
+    return res.json({
+      success: true,
+      usage: usage.toString(),
+      day,
+      message: `Daily usage for day ${day}: ${usage.toString()}`
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/daily-usage] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get daily usage",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Update permission limits
+ */
+router.post("/callpolicy/update-limits", async (req: Request, res: Response) => {
+  try {
+    const { 
+      policyId, 
+      wallet, 
+      callType, 
+      target, 
+      selector, 
+      newValueLimit, 
+      newDailyLimit 
+    } = req.body;
+    
+    if (!policyId || !wallet || callType === undefined || !target || !selector || 
+        newValueLimit === undefined || newDailyLimit === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "All parameters are required: policyId, wallet, callType, target, selector, newValueLimit, newDailyLimit"
+      });
+    }
+    
+    console.log(`[CallPolicy/UpdateLimits] Updating limits for:`, {
+      policyId,
+      wallet,
+      callType,
+      target,
+      selector,
+      newValueLimit,
+      newDailyLimit
+    });
+    
+    const { unpacked } = await buildUpdatePermissionLimitsUO(
+      policyId as `0x${string}`,
+      wallet as `0x${string}`,
+      callType,
+      target as `0x${string}`,
+      selector as `0x${string}`,
+      BigInt(newValueLimit),
+      BigInt(newDailyLimit)
+    );
+    
+    return res.json({
+      success: true,
+      userOp: unpacked,
+      message: "Permission limits update user operation created successfully"
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/update-limits] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to create update limits user operation",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get all permissions with daily usage for a policy
+ */
+router.post("/callpolicy/all-permissions-with-usage", async (req: Request, res: Response) => {
+  try {
+    const { policyId, owner } = req.body;
+    
+    if (!policyId || !owner) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "policyId and owner are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/AllPermissionsWithUsage] Getting all permissions with usage for:`, {
+      policyId,
+      owner
+    });
+    
+    const permissions = await getAllCallPolicyPermissionsWithUsage(
+      policyId as `0x${string}`,
+      owner as `0x${string}`
+    );
+    
+    // Convert BigInt values to strings for JSON serialization
+    const serializedPermissions = permissions.map(permission => ({
+      ...permission,
+      valueLimit: permission.valueLimit.toString(),
+      dailyLimit: permission.dailyLimit.toString(),
+      dailyUsage: permission.dailyUsage.toString(),
+      rules: permission.rules.map(rule => ({
+        ...rule,
+        offset: rule.offset.toString(),
+        params: rule.params
+      }))
+    }));
+    
+    return res.json({
+      success: true,
+      permissions: serializedPermissions,
+      count: serializedPermissions.length,
+      message: `Found ${serializedPermissions.length} permissions with daily usage`
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/all-permissions-with-usage] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get all permissions with usage",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get daily usage for today
+ */
+router.post("/callpolicy/daily-usage-today", async (req: Request, res: Response) => {
+  try {
+    const { policyId, wallet, permissionHash } = req.body;
+    
+    if (!policyId || !wallet || !permissionHash) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters",
+        message: "policyId, wallet, and permissionHash are required"
+      });
+    }
+    
+    console.log(`[CallPolicy/DailyUsageToday] Getting today's usage for:`, {
+      policyId,
+      wallet,
+      permissionHash
+    });
+    
+    const usage = await getCallPolicyDailyUsageToday(
+      policyId as `0x${string}`,
+      wallet as `0x${string}`,
+      permissionHash as `0x${string}`
+    );
+    
+    const currentDay = getCurrentDay();
+    
+    return res.json({
+      success: true,
+      usage: usage.toString(),
+      day: currentDay,
+      message: `Today's usage (day ${currentDay}): ${usage.toString()}`
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/daily-usage-today] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get today's daily usage",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get current day number
+ */
+router.get("/callpolicy/current-day", async (req: Request, res: Response) => {
+  try {
+    const currentDay = getCurrentDay();
+    
+    return res.json({
+      success: true,
+      day: currentDay,
+      message: `Current day: ${currentDay}`
+    });
+    
+  } catch (err: any) {
+    console.error("[/callpolicy/current-day] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get current day",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Deposit ETH into the EntryPoint contract for the kernel account
+ */
+router.post("/entrypoint/deposit", async (req: Request, res: Response) => {
+  try {
+    console.log('[entrypoint/deposit] -> Request received:', req.body);
+    
+    const { amountEth } = req.body ?? {};
+    const amountStr = amountEth?.toString() ?? '0.01';
+    const parsedAmount = Number(amountStr);
+    
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      console.log('[entrypoint/deposit] -> Invalid amount:', amountStr);
+      return res.status(400).json({
+        error: "Invalid amount",
+        message: "Deposit amount must be a positive number",
+      });
+    }
+
+    const amountWei = parseEther(amountStr);
+    console.log('[entrypoint/deposit] -> Parsed amount:', amountStr, 'ETH =', amountWei.toString(), 'wei');
+    
+    console.log('[entrypoint/deposit] -> Building deposit UserOp for', amountStr, 'ETH');
+    
+    // Add more detailed error handling for buildDepositUserOp
+    let depositUserOp;
+    try {
+      depositUserOp = await buildDepositUserOp(amountWei);
+      console.log('[entrypoint/deposit] -> Deposit UserOp built successfully');
+    } catch (buildError: any) {
+      console.error('[entrypoint/deposit] -> Error building UserOp:', buildError);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to build deposit UserOp",
+        message: buildError?.message ?? "UserOp build error",
+        details: buildError?.stack
+      });
+    }
+    
+    console.log('[entrypoint/deposit] -> Sending UserOp to bundler...');
+    
+    // Add more detailed error handling for sendUserOpV07
+    let txHash;
+    try {
+      txHash = await sendUserOpV07(depositUserOp.unpacked);
+      console.log('[entrypoint/deposit] -> Deposit submitted. TxHash:', txHash);
+    } catch (sendError: any) {
+      console.error('[entrypoint/deposit] -> Error sending UserOp:', sendError);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to send UserOp to bundler",
+        message: sendError?.message ?? "UserOp send error",
+        details: sendError?.stack
+      });
+    }
+    
+    return res.json({
+      success: true,
+      txHash,
+      message: `Deposited ${amountStr} ETH to EntryPoint`,
+    });
+  } catch (err: any) {
+    console.error("[/entrypoint/deposit] error:", err);
+    console.error("[/entrypoint/deposit] error stack:", err?.stack);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to deposit to EntryPoint",
+      message: err?.message ?? "internal error",
+      details: err?.stack
     });
   }
 });
@@ -387,11 +1033,14 @@ router.post("/delegated/install-callpolicy", async (req: Request, res: Response)
     const callPolicyPermissions: CallPolicyPermission[] = permissions.map(perm => {
       const ethValue = parseFloat(perm.valueLimit.toString());
       const weiValue = Math.floor(ethValue * 1e18);
+      const ethDailyValue = parseFloat((perm.dailyLimit || 0).toString());
+      const weiDailyValue = Math.floor(ethDailyValue * 1e18);
       return {
         callType: perm.callType,
         target: perm.target as `0x${string}`,
         selector: (perm.selector === '0x' ? '0x00000000' : perm.selector) as `0x${string}`,
         valueLimit: BigInt(weiValue), // Convert ETH to wei
+        dailyLimit: BigInt(weiDailyValue), // NEW: Convert daily limit ETH to wei
         rules: (perm.rules || []).map((rule: any) => ({
           condition: rule.condition,
           offset: rule.offset,
@@ -749,21 +1398,76 @@ async function performDelegatedKeyInstallation(
     
     if (keyType === 'callpolicy') {
     // Convert permissions to the expected format (convert ETH to wei)
-    const callPolicyPermissions: CallPolicyPermission[] = permissions!.map(perm => {
-      const ethValue = parseFloat(perm.valueLimit.toString());
-      const weiValue = Math.floor(ethValue * 1e18);
-      return {
-        callType: perm.callType,
-        target: perm.target as `0x${string}`,
-        selector: (perm.selector === '0x' ? '0x00000000' : perm.selector) as `0x${string}`,
-        valueLimit: BigInt(weiValue), // Convert ETH to wei
-        rules: (perm.rules || []).map((rule: any) => ({
-          condition: rule.condition,
-          offset: rule.offset,
-          params: rule.params || []
-        }))
+      const callPolicyPermissions: CallPolicyPermission[] = permissions!.map(perm => {
+        const ethValue = parseFloat(perm.valueLimit.toString());
+        const weiValue = Math.floor(ethValue * 1e18);
+        const ethDailyValue = parseFloat((perm.dailyLimit || 0).toString());
+        const weiDailyValue = Math.floor(ethDailyValue * 1e18);
+        return {
+          callType: perm.callType,
+          target: perm.target as `0x${string}`,
+          selector: (perm.selector === '0x' ? '0x00000000' : perm.selector) as `0x${string}`,
+          valueLimit: BigInt(weiValue), // Convert ETH to wei
+          dailyLimit: BigInt(weiDailyValue), // NEW: Convert daily limit ETH to wei
+          rules: (perm.rules || []).map((rule: any) => ({
+            condition: rule.condition,
+            offset: rule.offset,
+            params: rule.params || []
+          }))
       };
     });
+
+    // Print CallPolicy restrictions in a clear format
+    console.log('\n🔒 ===== CALLPOLICY RESTRICTIONS SETUP =====');
+    console.log(`📱 Delegated Key: ${delegatedEOA}`);
+    
+    // Extract unique targets and actions from permissions
+    const uniqueTargets = [...new Set(callPolicyPermissions.map(p => p.target))];
+    const uniqueSelectors = [...new Set(callPolicyPermissions.map(p => p.selector))];
+    
+    console.log('\n🎯 ALLOWED TARGET ADDRESSES:');
+    uniqueTargets.forEach((target, index) => {
+      console.log(`   ${index + 1}. ${target}`);
+    });
+    
+    console.log('\n⚡ ALLOWED FUNCTION SELECTORS:');
+    uniqueSelectors.forEach((selector, index) => {
+      const actionName = selector === '0x00000000' ? 'ETH Transfer' : 
+                        selector === '0xa9059cbb' ? 'Transfer' :
+                        selector === '0x095ea7b3' ? 'Approve' :
+                        selector === '0x23b872dd' ? 'Transfer From' :
+                        selector === '0x38ed1739' ? 'Swap' :
+                        selector === '0xa694fc3a' ? 'Stake' :
+                        selector === '0x2e17de78' ? 'Unstake' :
+                        selector === '0x379607f5' ? 'Claim Rewards' :
+                        selector === '0x47e7ef24' ? 'Deposit' :
+                        selector === '0x2e1a7d4d' ? 'Withdraw' : 'Unknown';
+      console.log(`   ${index + 1}. ${actionName} (${selector})`);
+    });
+    
+    console.log('\n🔐 GENERATED PERMISSIONS:');
+    callPolicyPermissions.forEach((perm, index) => {
+      const actionName = perm.selector === '0x00000000' ? 'ETH Transfer' : 
+                        perm.selector === '0xa9059cbb' ? 'Transfer' :
+                        perm.selector === '0x095ea7b3' ? 'Approve' :
+                        perm.selector === '0x23b872dd' ? 'Transfer From' :
+                        perm.selector === '0x38ed1739' ? 'Swap' :
+                        perm.selector === '0xa694fc3a' ? 'Stake' :
+                        perm.selector === '0x2e17de78' ? 'Unstake' :
+                        perm.selector === '0x379607f5' ? 'Claim Rewards' :
+                        perm.selector === '0x47e7ef24' ? 'Deposit' :
+                        perm.selector === '0x2e1a7d4d' ? 'Withdraw' : 'Unknown';
+      const ethValue = (Number(perm.valueLimit) / 1e18).toFixed(6);
+      const ethDailyValue = (Number(perm.dailyLimit) / 1e18).toFixed(6);
+      console.log(`   ${index + 1}. ${actionName}`);
+      console.log(`      Target: ${perm.target}`);
+      console.log(`      Selector: ${perm.selector}`);
+      console.log(`      Value Limit: ${ethValue} ETH`);
+      console.log(`      Daily Limit: ${ethDailyValue} ETH`);
+      console.log(`      Rules: ${perm.rules.length > 0 ? JSON.stringify(perm.rules, null, 8) : 'None'}`);
+      console.log('');
+    });
+    console.log('🔒 ===========================================\n');
       
       const { unpacked: installUO, permissionId: permId, vId: vid } = await buildInstallCallPolicyUO(
         delegatedEOA as `0x${string}`, 
@@ -772,6 +1476,10 @@ async function performDelegatedKeyInstallation(
       installTxHash = await sendUserOpV07(installUO);
       permissionId = permId;
       vId = vid;
+      
+      // Log the assigned IDs
+      console.log(`🔑 Permission ID: ${permissionId}`);
+      console.log(`🆔 Validation ID: ${vId}`);
     } else {
       const { unpacked: installUO, permissionId: permId, vId: vid } = await buildInstallPermissionUO(delegatedEOA as `0x${string}`);
       installTxHash = await sendUserOpV07(installUO);
@@ -857,7 +1565,9 @@ async function performDelegatedKeyInstallation(
     sendStatus({
       step: 'completed',
       message: `${keyTypeDisplay} delegated key created successfully!`,
-      progress: 100
+      progress: 100,
+      permissionId,
+      vId
     });
 
     console.log(`[Installation ${installationId}] Completed successfully!`);

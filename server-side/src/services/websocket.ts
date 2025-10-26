@@ -7,6 +7,8 @@ export interface InstallationStatus {
   progress: number; // 0-100
   txHash?: string;
   error?: string;
+  permissionId?: string;
+  vId?: string;
 }
 
 export class WebSocketService {
@@ -74,10 +76,14 @@ export class WebSocketService {
   broadcastToClient(clientId: string, status: InstallationStatus) {
     const ws = this.clients.get(clientId);
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
+      const message = {
         type: 'status_update',
         ...status
-      }));
+      };
+      console.log('[WebSocket] Broadcasting to client', clientId, ':', message);
+      ws.send(JSON.stringify(message));
+    } else {
+      console.log('[WebSocket] Client', clientId, 'not found or not connected');
     }
   }
 

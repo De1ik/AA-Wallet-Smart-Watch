@@ -53,6 +53,18 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        <View style={styles.section}>
+          <Text style={styles.sectionHeading}>EntryPoint</Text>
+          <TouchableOpacity 
+            style={styles.settingItem}
+            onPress={() => router.push('/settings/entry-point')}
+          >
+            <IconSymbol name="link.circle.fill" size={24} color="#8B5CF6" />
+            <Text style={styles.settingText}>Prefund & Deposits</Text>
+            <IconSymbol name="chevron.right" size={16} color="#A0A0A0" />
+          </TouchableOpacity>
+        </View>
+
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
           <IconSymbol name="rectangle.portrait.and.arrow.right" size={24} color="#EF4444" />
           <Text style={styles.logoutText}>Logout</Text>
@@ -82,6 +94,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A1A',
     borderRadius: 16,
     marginBottom: 32,
+  },
+  sectionHeading: {
+    fontSize: 13,
+    color: '#A0A0A0',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 4,
   },
   settingItem: {
     flexDirection: 'row',
@@ -114,4 +135,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

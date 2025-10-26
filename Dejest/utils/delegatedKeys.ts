@@ -14,7 +14,9 @@ export interface CallPolicyPermission {
   target: string;
   selector: string;
   valueLimit: string; // in ETH
+  dailyLimit: string; // in ETH - NEW: Daily spending limit
   rules: CallPolicyParamRule[];
+  dailyUsage?: string; // Optional: Current daily usage in ETH
 }
 
 export interface PredefinedAction {
@@ -25,8 +27,13 @@ export interface PredefinedAction {
   category: 'transfer' | 'approve' | 'swap' | 'stake' | 'other';
 }
 
+export interface TargetAddress {
+  name: string;
+  address: string;
+}
+
 export interface CallPolicySettings {
-  allowedTargets: string[];
+  allowedTargets: TargetAddress[];
   allowedActions: string[];
   maxValuePerTx: string; // in ETH
   maxValuePerDay: string; // in ETH

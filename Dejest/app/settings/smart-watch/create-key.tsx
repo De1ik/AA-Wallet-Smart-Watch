@@ -8,7 +8,7 @@ import { apiClient, InstallationStatus } from '@/utils/apiClient';
 import { wsClient } from '@/utils/websocketClient';
 import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey, CallPolicyPermission, CallPolicyParamRule, CallPolicyParamCondition, PredefinedAction, CallPolicySettings } from '@/utils/delegatedKeys';
 import { useSmartWatch } from '@/hooks/useSmartWatch';
-import { WatchKeyPair, WatchPermissionData } from '@/utils/smartWatchBridge';
+import { WatchKeyPair, WatchPermissionData, smartWatchBridge } from '@/utils/smartWatchBridge';
 import { getKernelAddress } from '@/utils/config';
 import { installationState } from '@/utils/installationState';
 
@@ -34,28 +34,28 @@ export default function CreateDelegatedKeyScreen() {
     clearError
   } = useSmartWatch();
   
-  // Restricted key settings
-  const [allowEveryone, setAllowEveryone] = useState(true);
-  const [whitelistAddresses, setWhitelistAddresses] = useState<string[]>([]);
-  const [newAddress, setNewAddress] = useState('');
-  const [tokenLimits, setTokenLimits] = useState<TokenLimit[]>([
-    { tokenAddress: '0x0000000000000000000000000000000000000000', tokenSymbol: 'ETH', maxAmountPerDay: '0.1', maxAmountPerTx: '0.01' }
-  ]);
-  const [newTokenAddress, setNewTokenAddress] = useState('');
-  const [newTokenSymbol, setNewTokenSymbol] = useState('');
-  const [newTokenMaxDay, setNewTokenMaxDay] = useState('');
-  const [newTokenMaxTx, setNewTokenMaxTx] = useState('');
   
   // CallPolicy settings
   const [showCallPolicySettings, setShowCallPolicySettings] = useState(false);
   const [callPolicySettings, setCallPolicySettings] = useState<CallPolicySettings>({
     allowedTargets: [],
-    allowedActions: [],
+    allowedActions: ['transfer'], // Set 'transfer' as default
     maxValuePerTx: '0.1',
     maxValuePerDay: '1.0'
   });
+  const [maxValuePerTxError, setMaxValuePerTxError] = useState('');
+  const [maxValuePerDayError, setMaxValuePerDayError] = useState('');
+  const [newTargetName, setNewTargetName] = useState('');
   const [newTargetAddress, setNewTargetAddress] = useState('');
   const [showAddTarget, setShowAddTarget] = useState(false);
+  const [showActionSelector, setShowActionSelector] = useState(false);
+  const [actionSearchQuery, setActionSearchQuery] = useState('');
+  const [showTransferOptions, setShowTransferOptions] = useState(false);
+  const [transferOptions, setTransferOptions] = useState({
+    eth: true,
+    erc20: false
+  });
+  const [transferEnabled, setTransferEnabled] = useState(true);
   
   // Predefined actions
   const predefinedActions: PredefinedAction[] = [
@@ -76,9 +76,7 @@ export default function CreateDelegatedKeyScreen() {
     } else {
       setKeyType(type);
       if (type === 'restricted') {
-        setShowRestrictedSettings(true);
-      } else if (type === 'callpolicy') {
-        setShowCallPolicySettings(true);
+        setShowCallPolicySettings(true); // Use CallPolicy settings for restricted
       }
     }
   };
@@ -94,6 +92,14 @@ export default function CreateDelegatedKeyScreen() {
 
   const handleAddressConfirmation = async (confirmed: boolean) => {
     if (confirmed && pendingKeyPair) {
+      // Send message to watch to show installation waiting screen
+      try {
+        smartWatchBridge.sendToWatch({ type: "START_INSTALLATION" });
+        console.log('Sent START_INSTALLATION message to watch');
+      } catch (error) {
+        console.error('Failed to send START_INSTALLATION to watch:', error);
+      }
+      
       // User confirmed the address, save the device immediately with "installing" status
       const deviceId = Date.now().toString();
       const initialDeviceData: DelegatedKeyData = {
@@ -110,11 +116,6 @@ export default function CreateDelegatedKeyScreen() {
           totalSteps: keyType === 'sudo' ? 3 : 4, // sudo: install, grant, save | restricted: install, enable, grant, save
           completedSteps: 0,
         },
-        ...(keyType === 'restricted' && {
-          whitelistAddresses: allowEveryone ? [] : whitelistAddresses,
-          tokenLimits,
-          allowEveryone
-        })
       };
 
       // Save the device immediately
@@ -135,47 +136,20 @@ export default function CreateDelegatedKeyScreen() {
     }
   };
 
-  const addWhitelistAddress = () => {
-    if (newAddress && newAddress.startsWith('0x') && newAddress.length === 42) {
-      setWhitelistAddresses(prev => [...prev, newAddress]);
-      setNewAddress('');
-    } else {
-      Alert.alert('Error', 'Please enter a valid Ethereum address');
-    }
-  };
 
-  const removeWhitelistAddress = (index: number) => {
-    setWhitelistAddresses(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const addTokenLimit = () => {
-    if (newTokenAddress && newTokenSymbol && newTokenMaxDay && newTokenMaxTx) {
-      setTokenLimits(prev => [...prev, {
-        tokenAddress: newTokenAddress,
-        tokenSymbol: newTokenSymbol,
-        maxAmountPerDay: newTokenMaxDay,
-        maxAmountPerTx: newTokenMaxTx
-      }]);
-      setNewTokenAddress('');
-      setNewTokenSymbol('');
-      setNewTokenMaxDay('');
-      setNewTokenMaxTx('');
-    } else {
-      Alert.alert('Error', 'Please fill in all token limit fields');
-    }
-  };
-
-  const removeTokenLimit = (index: number) => {
-    setTokenLimits(prev => prev.filter((_, i) => i !== index));
-  };
 
   // CallPolicy functions
   const addTargetAddress = () => {
+    if (!newTargetName.trim()) {
+      Alert.alert('Error', 'Please enter a name for this address');
+      return;
+    }
     if (newTargetAddress && newTargetAddress.startsWith('0x') && newTargetAddress.length === 42) {
       setCallPolicySettings(prev => ({
         ...prev,
-        allowedTargets: [...prev.allowedTargets, newTargetAddress]
+        allowedTargets: [...prev.allowedTargets, { name: newTargetName.trim(), address: newTargetAddress }]
       }));
+      setNewTargetName('');
       setNewTargetAddress('');
       setShowAddTarget(false);
     } else {
@@ -199,31 +173,201 @@ export default function CreateDelegatedKeyScreen() {
     }));
   };
 
+  const addAction = (actionId: string) => {
+    if (actionId === 'transfer') {
+      // Show transfer options modal
+      setShowTransferOptions(true);
+    } else {
+      if (!callPolicySettings.allowedActions.includes(actionId)) {
+        setCallPolicySettings(prev => ({
+          ...prev,
+          allowedActions: [...prev.allowedActions, actionId]
+        }));
+      }
+      setShowActionSelector(false);
+      setActionSearchQuery('');
+    }
+  };
+
+  const handleTransferToggle = () => {
+    if (transferEnabled) {
+      // Disable transfer
+      setTransferEnabled(false);
+      setCallPolicySettings(prev => ({
+        ...prev,
+        allowedActions: prev.allowedActions.filter(id => id !== 'transfer')
+      }));
+    } else {
+      // Enable transfer with current options
+      setTransferEnabled(true);
+      if (!callPolicySettings.allowedActions.includes('transfer')) {
+        setCallPolicySettings(prev => ({
+          ...prev,
+          allowedActions: [...prev.allowedActions, 'transfer']
+        }));
+      }
+    }
+  };
+
+  const handleTransferCardClick = () => {
+    if (transferEnabled) {
+      // Show transfer options modal
+      setShowTransferOptions(true);
+    } else {
+      // Enable transfer first
+      setTransferEnabled(true);
+      if (!callPolicySettings.allowedActions.includes('transfer')) {
+        setCallPolicySettings(prev => ({
+          ...prev,
+          allowedActions: [...prev.allowedActions, 'transfer']
+        }));
+      }
+    }
+  };
+
+  const confirmTransferOptions = () => {
+    // Add transfer action with selected options
+    if (!callPolicySettings.allowedActions.includes('transfer')) {
+      setCallPolicySettings(prev => ({
+        ...prev,
+        allowedActions: [...prev.allowedActions, 'transfer']
+      }));
+    }
+    setShowTransferOptions(false);
+    setShowActionSelector(false);
+    setActionSearchQuery('');
+  };
+
+  const removeAction = (actionId: string) => {
+    setCallPolicySettings(prev => ({
+      ...prev,
+      allowedActions: prev.allowedActions.filter(id => id !== actionId)
+    }));
+  };
+
+  const filteredActions = predefinedActions.filter(action =>
+    action.name.toLowerCase().includes(actionSearchQuery.toLowerCase()) ||
+    action.description.toLowerCase().includes(actionSearchQuery.toLowerCase())
+  );
+
+  // Validate and filter max transaction amount input
+  const handleMaxValuePerTxChange = (text: string) => {
+    // Remove any non-numeric characters except decimal point
+    const filteredText = text.replace(/[^0-9.]/g, '');
+    
+    // Prevent multiple decimal points
+    const parts = filteredText.split('.');
+    const cleanText = parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : filteredText;
+    
+    // Update the value
+    setCallPolicySettings(prev => ({ ...prev, maxValuePerTx: cleanText }));
+    
+    // Validate the value
+    const numValue = parseFloat(cleanText);
+    if (cleanText === '' || cleanText === '.') {
+      setMaxValuePerTxError('');
+    } else if (isNaN(numValue) || numValue <= 0) {
+      setMaxValuePerTxError('Amount must be greater than 0');
+    } else {
+      setMaxValuePerTxError('');
+    }
+  };
+
+  const handleMaxValuePerDayChange = (text: string) => {
+    // Remove any non-numeric characters except decimal point
+    const filteredText = text.replace(/[^0-9.]/g, '');
+    
+    // Prevent multiple decimal points
+    const parts = filteredText.split('.');
+    const cleanText = parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : filteredText;
+    
+    // Update the value
+    setCallPolicySettings(prev => ({ ...prev, maxValuePerDay: cleanText }));
+    
+    // Validate the value
+    const numValue = parseFloat(cleanText);
+    if (cleanText === '' || cleanText === '.') {
+      setMaxValuePerDayError('');
+    } else if (isNaN(numValue) || numValue <= 0) {
+      setMaxValuePerDayError('Amount must be greater than 0');
+    } else {
+      setMaxValuePerDayError('');
+    }
+  };
+
+  // Validation for Restricted settings (using CallPolicy)
+  const isRestrictedValid = () => {
+    if (keyType !== 'restricted') return true;
+    
+    const numTxValue = parseFloat(callPolicySettings.maxValuePerTx);
+    const numDayValue = parseFloat(callPolicySettings.maxValuePerDay);
+    const hasValidTransferOptions = !callPolicySettings.allowedActions.includes('transfer') || 
+                                   !transferEnabled ||
+                                   (transferOptions.eth || transferOptions.erc20);
+    
+    return callPolicySettings.allowedTargets.length > 0 &&
+           callPolicySettings.maxValuePerTx &&
+           callPolicySettings.maxValuePerTx !== '0' &&
+           callPolicySettings.maxValuePerTx !== '' &&
+           callPolicySettings.maxValuePerTx !== '.' &&
+           !isNaN(numTxValue) &&
+           numTxValue > 0 &&
+           callPolicySettings.maxValuePerDay &&
+           callPolicySettings.maxValuePerDay !== '0' &&
+           callPolicySettings.maxValuePerDay !== '' &&
+           callPolicySettings.maxValuePerDay !== '.' &&
+           !isNaN(numDayValue) &&
+           numDayValue > 0 &&
+           callPolicySettings.allowedActions.length > 0 &&
+           hasValidTransferOptions &&
+           !maxValuePerTxError &&
+           !maxValuePerDayError;
+  };
+
   const generateCallPolicyPermissions = (): CallPolicyPermission[] => {
     const permissions: CallPolicyPermission[] = [];
     
     // Create permissions for each allowed target and action combination
     callPolicySettings.allowedTargets.forEach(target => {
       callPolicySettings.allowedActions.forEach(actionId => {
-        const action = predefinedActions.find(a => a.id === actionId);
-        if (action) {
-          permissions.push({
-            callType: 0, // Always CALL for user-friendly interface
-            target,
-            selector: action.selector,
-            valueLimit: callPolicySettings.maxValuePerTx,
-            rules: []
-          });
+        if (actionId === 'transfer' && transferEnabled) {
+          // Handle transfer with options
+          if (transferOptions.eth) {
+            // Add ETH transfer permission (selector 0x00000000)
+            permissions.push({
+              callType: 0, // Always CALL for user-friendly interface
+              target: target.address, // Use address from the TargetAddress object
+              selector: '0x00000000', // ETH transfer selector
+              valueLimit: callPolicySettings.maxValuePerTx,
+              dailyLimit: callPolicySettings.maxValuePerDay, // NEW: Include daily limit
+              rules: []
+            });
+          }
+          if (transferOptions.erc20) {
+            // Add ERC20 transfer permission (selector 0xa9059cbb)
+            permissions.push({
+              callType: 0, // Always CALL for user-friendly interface
+              target: target.address, // Use address from the TargetAddress object
+              selector: '0xa9059cbb', // ERC20 transfer selector
+              valueLimit: callPolicySettings.maxValuePerTx,
+              dailyLimit: callPolicySettings.maxValuePerDay, // NEW: Include daily limit
+              rules: []
+            });
+          }
+        } else {
+          // Handle other actions normally
+          const action = predefinedActions.find(a => a.id === actionId);
+          if (action) {
+            permissions.push({
+              callType: 0, // Always CALL for user-friendly interface
+              target: target.address, // Use address from the TargetAddress object
+              selector: action.selector,
+              valueLimit: callPolicySettings.maxValuePerTx,
+              dailyLimit: callPolicySettings.maxValuePerDay, // NEW: Include daily limit
+              rules: []
+            });
+          }
         }
-      });
-      
-      // Always add ETH transfer permission (using zero selector for ETH transfers)
-      permissions.push({
-        callType: 0, // Always CALL for user-friendly interface
-        target,
-        selector: '0x00000000', // 4-byte zero selector for ETH transfers
-        valueLimit: callPolicySettings.maxValuePerTx,
-        rules: []
       });
     });
     
@@ -259,15 +403,30 @@ export default function CreateDelegatedKeyScreen() {
       // Start global installation state tracking
       installationState.startInstallation(deviceId, deviceName.trim(), keyType);
 
-      // Check prefund first
+      // Check prefund first (track errors instead of throwing)
       try {
         const prefundCheck = await apiClient.checkPrefund();
         if (!prefundCheck.hasPrefund) {
-          throw new Error(prefundCheck.message || 'Insufficient funds in EntryPoint');
+          const prefundMessage =
+            prefundCheck.message ||
+            prefundCheck.details ||
+            prefundCheck.error ||
+            'Insufficient funds in EntryPoint';
+          console.warn('[CreateKey] Prefund check failed:', prefundMessage);
+          await handleInstallationError(
+            `Account balance check failed: ${prefundMessage}`,
+            deviceId
+          );
+          return;
         }
       } catch (prefundError: any) {
-        const errorMessage = prefundError.message || 'Failed to check account balance';
-        throw new Error(`Account balance check failed: ${errorMessage}`);
+        const errorMessage = prefundError?.message || 'Failed to check account balance';
+        console.warn('[CreateKey] Prefund check threw error:', errorMessage);
+        await handleInstallationError(
+          `Account balance check failed: ${errorMessage}`,
+          deviceId
+        );
+        return;
       }
 
       // Start the installation process
@@ -278,9 +437,61 @@ export default function CreateDelegatedKeyScreen() {
         clientId
       };
       
-      // Add permissions for CallPolicy
-      if (keyType === 'callpolicy') {
-        requestData.permissions = generateCallPolicyPermissions();
+      // Add permissions for Restricted (using CallPolicy)
+      if (keyType === 'restricted') {
+        const permissions = generateCallPolicyPermissions();
+        requestData.permissions = permissions;
+        requestData.keyType = 'callpolicy'; // Send as callpolicy to server
+        
+        // Log CallPolicy restrictions being sent
+        console.log('\n📱 ===== CLIENT: CALLPOLICY RESTRICTIONS =====');
+        console.log(`🔑 Key Type: ${keyType}`);
+        console.log(`💰 Max Value Per Transaction: ${callPolicySettings.maxValuePerTx} ETH`);
+        console.log(`📅 Max Value Per Day: ${callPolicySettings.maxValuePerDay} ETH`);
+        console.log('\n🎯 ALLOWED TARGET ADDRESSES:');
+        callPolicySettings.allowedTargets.forEach((target, index) => {
+          console.log(`   ${index + 1}. ${target.name} (${target.address})`);
+        });
+        console.log('\n⚡ ALLOWED ACTIONS:');
+        callPolicySettings.allowedActions.forEach((actionId, index) => {
+          if (actionId === 'transfer') {
+            console.log(`   ${index + 1}. Transfer - ${transferEnabled ? 'ENABLED' : 'DISABLED'}`);
+            if (transferEnabled) {
+              console.log(`      Transfer Options:`);
+              if (transferOptions.eth) {
+                console.log(`      - ETH Transfers (0x00000000)`);
+              }
+              if (transferOptions.erc20) {
+                console.log(`      - ERC20 Token Transfers (0xa9059cbb)`);
+              }
+            }
+          } else {
+            const action = predefinedActions.find(a => a.id === actionId);
+            if (action) {
+              console.log(`   ${index + 1}. ${action.name} (${action.selector}) - ${action.description}`);
+            }
+          }
+        });
+        console.log('\n🔐 GENERATED PERMISSIONS:');
+        permissions.forEach((perm, index) => {
+          let actionName = 'Unknown';
+          if (perm.selector === '0x00000000') {
+            actionName = 'ETH Transfer';
+          } else if (perm.selector === '0xa9059cbb') {
+            actionName = 'ERC20 Transfer';
+          } else {
+            const action = predefinedActions.find(a => a.selector === perm.selector);
+            actionName = action ? action.name : 'Unknown';
+          }
+          console.log(`   ${index + 1}. ${actionName}`);
+          console.log(`      Target: ${perm.target}`);
+          console.log(`      Selector: ${perm.selector}`);
+          console.log(`      Value Limit: ${perm.valueLimit} ETH`);
+          console.log(`      Daily Limit: ${perm.dailyLimit} ETH`);
+          console.log(`      Rules: ${perm.rules.length > 0 ? JSON.stringify(perm.rules, null, 8) : 'None'}`);
+          console.log('');
+        });
+        console.log('📱 ===========================================\n');
       }
       
       const result = await apiClient.createDelegatedKey(requestData);
@@ -305,18 +516,13 @@ export default function CreateDelegatedKeyScreen() {
         id: deviceId, // Use the same deviceId that was created initially
         deviceName: deviceName.trim(),
         keyType,
-        permissionId: '0x00000000', // Placeholder - should come from server
-        vId: '0x000000000000000000000000000000000000000000', // Placeholder - should come from server
+        permissionId: '', // Will be updated by WebSocket status update
+        vId: '', // Will be updated by WebSocket status update
         publicAddress: keyPair.address,
         createdAt: new Date().toISOString(),
         installationStatus: 'completed', // Mark as completed
         installationProgress: undefined, // Clear progress data when completed
         ...(keyType === 'restricted' && {
-          whitelistAddresses: allowEveryone ? [] : whitelistAddresses,
-          tokenLimits,
-          allowEveryone
-        }),
-        ...(keyType === 'callpolicy' && {
           callPolicyPermissions: generateCallPolicyPermissions()
         })
       };
@@ -378,9 +584,21 @@ export default function CreateDelegatedKeyScreen() {
     let title = 'Installation Failed';
     let showRetryOption = false;
     
-    if (errorMessage.includes('Insufficient funds') || errorMessage.includes('AA21')) {
+    const normalizedError = errorMessage.toLowerCase();
+    
+    const shouldNavigateBackToCreate =
+      normalizedError.includes('insufficient funds') ||
+      normalizedError.includes('aa21') ||
+      normalizedError.includes('prefund');
+    
+    if (
+      normalizedError.includes('insufficient funds') ||
+      normalizedError.includes('aa21') ||
+      normalizedError.includes('prefund')
+    ) {
       title = 'Insufficient Funds';
-      userFriendlyMessage = 'Your account doesn\'t have enough ETH deposited in the EntryPoint to pay for transaction fees.\n\nPlease deposit more ETH to your smart wallet first.';
+      userFriendlyMessage =
+        'Your account does not have enough ETH deposited in the EntryPoint to pay for transaction fees.\n\nPlease add more prefund to your smart wallet before trying again.';
     } else if (errorMessage.includes('Network error') || errorMessage.includes('RPC')) {
       title = 'Network Error';
       userFriendlyMessage = 'Unable to connect to the blockchain network.\n\nPlease check your internet connection and try again.';
@@ -400,8 +618,11 @@ export default function CreateDelegatedKeyScreen() {
         text: 'OK',
         onPress: () => {
           wsClient.disconnect();
-      setIsConnecting(false);
-    }
+          setIsConnecting(false);
+          if (shouldNavigateBackToCreate) {
+            router.back();
+          }
+        }
       }
     ];
 
@@ -430,6 +651,42 @@ export default function CreateDelegatedKeyScreen() {
       return;
     }
 
+    // Validate Restricted settings (using CallPolicy)
+    if (keyType === 'restricted') {
+      if (callPolicySettings.allowedTargets.length === 0) {
+        Alert.alert('Error', 'Please add at least one allowed target address');
+        return;
+      }
+
+      const numTxValue = parseFloat(callPolicySettings.maxValuePerTx);
+      const numDayValue = parseFloat(callPolicySettings.maxValuePerDay);
+      
+      if (!callPolicySettings.maxValuePerTx || 
+          callPolicySettings.maxValuePerTx === '0' || 
+          callPolicySettings.maxValuePerTx === '' ||
+          callPolicySettings.maxValuePerTx === '.' ||
+          isNaN(numTxValue) ||
+          numTxValue <= 0) {
+        Alert.alert('Error', 'Please set a valid maximum transaction amount greater than 0');
+        return;
+      }
+      
+      if (!callPolicySettings.maxValuePerDay || 
+          callPolicySettings.maxValuePerDay === '0' || 
+          callPolicySettings.maxValuePerDay === '' ||
+          callPolicySettings.maxValuePerDay === '.' ||
+          isNaN(numDayValue) ||
+          numDayValue <= 0) {
+        Alert.alert('Error', 'Please set a valid maximum daily amount greater than 0');
+        return;
+      }
+
+      if (callPolicySettings.allowedActions.length === 0) {
+        Alert.alert('Error', 'Please select at least one action');
+        return;
+      }
+    }
+
     setIsConnecting(true);
     clearError();
 
@@ -450,7 +707,17 @@ export default function CreateDelegatedKeyScreen() {
       }
 
       console.log('[create-key] -> kernelAddress:', kernelAddress);
-      const keyPair = await requestKeyGeneration({ kernelAddress });
+      
+      // Prepare whitelist data if it's a restricted key type
+      const whitelist = keyType === 'restricted' && callPolicySettings.allowedTargets.length > 0
+        ? callPolicySettings.allowedTargets.map(target => ({ name: target.name, address: target.address }))
+        : undefined;
+      
+      console.log('[create-key] -> whitelist:', whitelist);
+      const keyPair = await requestKeyGeneration({ 
+        kernelAddress,
+        whitelist 
+      });
       
       console.log('Key pair generated on smart watch:');
       console.log('Public Key:', keyPair.address);
@@ -608,7 +875,7 @@ export default function CreateDelegatedKeyScreen() {
                     </Text>
                   </View>
                   <Text style={styles.keyTypeDescription}>
-                    Limited permissions with whitelist and spending limits
+                    Custom permissions with specific function and parameter restrictions
                   </Text>
                   <View style={[
                     styles.recommendedBadge,
@@ -661,57 +928,25 @@ export default function CreateDelegatedKeyScreen() {
                   </View>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[
-                    styles.keyTypeOption,
-                    keyType === 'callpolicy' && styles.keyTypeOptionSelected,
-                    !isWatchConnected && styles.keyTypeOptionDisabled
-                  ]}
-                  onPress={() => isWatchConnected && handleKeyTypeSelect('callpolicy')}
-                  disabled={!isWatchConnected}
-                >
-                  <View style={styles.keyTypeHeader}>
-                    <IconSymbol 
-                      name="gear.circle.fill" 
-                      size={24} 
-                      color={keyType === 'callpolicy' ? '#8B5CF6' : '#A0A0A0'} 
-                    />
-                    <Text style={[
-                      styles.keyTypeTitle,
-                      keyType === 'callpolicy' && styles.keyTypeTitleSelected
-                    ]}>
-                      CallPolicy Access
-                    </Text>
-                  </View>
-                  <Text style={styles.keyTypeDescription}>
-                    Custom permissions with specific function and parameter restrictions
-                  </Text>
-                  <View style={[
-                    styles.advancedBadge,
-                    keyType === 'callpolicy' && styles.advancedBadgeSelected
-                  ]}>
-                    <Text style={[
-                      styles.advancedText,
-                      keyType === 'callpolicy' && styles.advancedTextSelected
-                    ]}>
-                      Advanced
-                    </Text>
-                  </View>
-                </TouchableOpacity>
               </View>
             </View>
 
-            {/* CallPolicy Settings */}
-            {keyType === 'callpolicy' && isWatchConnected && (
+            {/* Restricted Settings (CallPolicy) */}
+            {keyType === 'restricted' && isWatchConnected && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>CallPolicy Settings</Text>
+                <Text style={styles.sectionTitle}>Restricted Access Settings</Text>
                 <Text style={styles.sectionSubtitle}>
                   Configure allowed targets, actions, and spending limits
                 </Text>
                 
                 {/* Allowed Target Addresses */}
                 <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>Allowed Target Addresses</Text>
+                  <View style={styles.subsectionHeader}>
+                    <Text style={styles.subsectionTitle}>Allowed Target Addresses</Text>
+                    {callPolicySettings.allowedTargets.length === 0 && (
+                      <Text style={styles.requiredIndicator}>* Required</Text>
+                    )}
+                  </View>
                   <Text style={styles.subsectionDescription}>
                     Smart contracts your watch can interact with
                   </Text>
@@ -720,7 +955,10 @@ export default function CreateDelegatedKeyScreen() {
                     <View style={styles.targetList}>
                       {callPolicySettings.allowedTargets.map((target, index) => (
                         <View key={index} style={styles.targetItem}>
-                          <Text style={styles.targetAddress}>{target}</Text>
+                          <View style={styles.targetInfo}>
+                            <Text style={styles.targetName}>{target.name}</Text>
+                            <Text style={styles.targetAddress}>{target.address}</Text>
+                          </View>
                           <TouchableOpacity
                             onPress={() => removeTargetAddress(index)}
                             style={styles.removeButton}
@@ -743,75 +981,154 @@ export default function CreateDelegatedKeyScreen() {
 
                 {/* Allowed Actions */}
                 <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>Allowed Actions</Text>
+                  <View style={styles.subsectionHeader}>
+                    <Text style={styles.subsectionTitle}>Allowed Actions</Text>
+                    {callPolicySettings.allowedActions.length === 0 && (
+                      <Text style={styles.requiredIndicator}>* Required</Text>
+                    )}
+                  </View>
                   <Text style={styles.subsectionDescription}>
                     Select the actions your watch can perform
                   </Text>
                   
-                  <View style={styles.actionsGrid}>
-                    {predefinedActions.map((action) => (
-                      <TouchableOpacity
-                        key={action.id}
-                        style={[
-                          styles.actionItem,
-                          callPolicySettings.allowedActions.includes(action.id) && styles.actionItemSelected
-                        ]}
-                        onPress={() => toggleAction(action.id)}
-                      >
-                        <View style={styles.actionHeader}>
+                  {/* Selected Actions */}
+                  <View style={styles.selectedActionsContainer}>
+                    {/* Transfer Card with Toggle */}
+                    <View style={[
+                      styles.transferCard,
+                      transferEnabled && styles.transferCardEnabled
+                    ]}>
+                      <View style={styles.transferCardHeader}>
+                        <View style={styles.transferCardInfo}>
                           <Text style={[
-                            styles.actionName,
-                            callPolicySettings.allowedActions.includes(action.id) && styles.actionNameSelected
+                            styles.transferCardTitle,
+                            transferEnabled && styles.transferCardTitleEnabled
                           ]}>
-                            {action.name}
+                            Transfer
                           </Text>
-                          <View style={[
-                            styles.actionBadge,
-                            action.category === 'transfer' && styles.transferBadge,
-                            action.category === 'approve' && styles.approveBadge,
-                            action.category === 'swap' && styles.swapBadge,
-                            action.category === 'stake' && styles.stakeBadge,
-                            action.category === 'other' && styles.otherBadge
-                          ]}>
-                            <Text style={styles.actionBadgeText}>{action.category}</Text>
-                          </View>
+                          <Text style={styles.transferCardDescription}>
+                            Send tokens to any address
+                          </Text>
+                          {transferEnabled && (
+                            <View style={styles.transferStatusContainer}>
+                              {transferOptions.eth && (
+                                <View style={styles.transferStatusItem}>
+                                  <IconSymbol name="bitcoinsign.circle.fill" size={14} color="#10B981" />
+                                  <Text style={styles.transferStatusText}>ETH</Text>
+                                </View>
+                              )}
+                              {transferOptions.erc20 && (
+                                <View style={styles.transferStatusItem}>
+                                  <IconSymbol name="dollarsign.circle.fill" size={14} color="#10B981" />
+                                  <Text style={styles.transferStatusText}>ERC20</Text>
+                                </View>
+                              )}
+                            </View>
+                          )}
                         </View>
-                        <Text style={styles.actionDescription}>{action.description}</Text>
-                      </TouchableOpacity>
-                    ))}
+                        <View style={styles.transferCardControls}>
+                          <TouchableOpacity
+                            style={[
+                              styles.transferToggle,
+                              transferEnabled && styles.transferToggleEnabled
+                            ]}
+                            onPress={handleTransferToggle}
+                          >
+                            <View style={[
+                              styles.transferToggleThumb,
+                              transferEnabled && styles.transferToggleThumbEnabled
+                            ]} />
+                          </TouchableOpacity>
+                          {transferEnabled && (
+                            <TouchableOpacity
+                              onPress={handleTransferCardClick}
+                              style={styles.transferSettingsButton}
+                            >
+                              <IconSymbol name="gearshape.fill" size={16} color="#10B981" />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    </View>
+
+                    {/* Other Actions */}
+                    {callPolicySettings.allowedActions.filter(actionId => actionId !== 'transfer').map((actionId) => {
+                      const action = predefinedActions.find(a => a.id === actionId);
+                      if (!action) return null;
+                      return (
+                        <View key={actionId} style={styles.selectedActionItem}>
+                          <View style={styles.selectedActionInfo}>
+                            <Text style={styles.selectedActionName}>{action.name}</Text>
+                            <Text style={styles.selectedActionDescription}>{action.description}</Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => removeAction(actionId)}
+                            style={styles.removeActionButton}
+                          >
+                            <IconSymbol name="xmark" size={16} color="#EF4444" />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
                   </View>
+                  
+                  <TouchableOpacity
+                    onPress={() => setShowActionSelector(true)}
+                    style={styles.addActionButton}
+                  >
+                    <IconSymbol name="plus" size={16} color="#10B981" />
+                    <Text style={styles.addActionText}>Add Action</Text>
+                  </TouchableOpacity>
                 </View>
 
                 {/* Spending Limits */}
                 <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>Spending Limits</Text>
+                  <View style={styles.subsectionHeader}>
+                    <Text style={styles.subsectionTitle}>Spending Limits</Text>
+                    {(!callPolicySettings.maxValuePerTx || callPolicySettings.maxValuePerTx === '0' || callPolicySettings.maxValuePerTx === '' || 
+                      !callPolicySettings.maxValuePerDay || callPolicySettings.maxValuePerDay === '0' || callPolicySettings.maxValuePerDay === '') && (
+                      <Text style={styles.requiredIndicator}>* Required</Text>
+                    )}
+                  </View>
                   <Text style={styles.subsectionDescription}>
-                    Set maximum transaction and daily limits
+                    Set maximum transaction limits
                   </Text>
                   
                   <View style={styles.limitsContainer}>
                     <View style={styles.limitItem}>
                       <Text style={styles.limitLabel}>Max per Transaction (ETH)</Text>
                       <TextInput
-                        style={styles.limitInput}
+                        style={[
+                          styles.limitInput,
+                          maxValuePerTxError && styles.limitInputError
+                        ]}
                         value={callPolicySettings.maxValuePerTx}
-                        onChangeText={(text) => setCallPolicySettings(prev => ({ ...prev, maxValuePerTx: text }))}
+                        onChangeText={handleMaxValuePerTxChange}
                         placeholder="0.1"
                         placeholderTextColor="#666666"
                         keyboardType="numeric"
                       />
+                      {maxValuePerTxError && (
+                        <Text style={styles.inputErrorText}>{maxValuePerTxError}</Text>
+                      )}
                     </View>
                     
                     <View style={styles.limitItem}>
                       <Text style={styles.limitLabel}>Max per Day (ETH)</Text>
                       <TextInput
-                        style={styles.limitInput}
+                        style={[
+                          styles.limitInput,
+                          maxValuePerDayError && styles.limitInputError
+                        ]}
                         value={callPolicySettings.maxValuePerDay}
-                        onChangeText={(text) => setCallPolicySettings(prev => ({ ...prev, maxValuePerDay: text }))}
+                        onChangeText={handleMaxValuePerDayChange}
                         placeholder="1.0"
                         placeholderTextColor="#666666"
                         keyboardType="numeric"
                       />
+                      {maxValuePerDayError && (
+                        <Text style={styles.inputErrorText}>{maxValuePerDayError}</Text>
+                      )}
                     </View>
                   </View>
                 </View>
@@ -821,159 +1138,23 @@ export default function CreateDelegatedKeyScreen() {
                   <View style={styles.summaryContainer}>
                     <Text style={styles.summaryTitle}>Permission Summary</Text>
                     <Text style={styles.summaryText}>
-                      Your watch can perform {callPolicySettings.allowedActions.length} action(s) on {callPolicySettings.allowedTargets.length} contract(s) with a maximum of {callPolicySettings.maxValuePerTx} ETH per transaction.
+                      Your watch can perform {callPolicySettings.allowedActions.length} action(s) on {callPolicySettings.allowedTargets.length} contract(s) with a maximum of {callPolicySettings.maxValuePerTx} ETH per transaction and {callPolicySettings.maxValuePerDay} ETH per day.
                     </Text>
                   </View>
                 )}
               </View>
             )}
 
-            {/* Restricted Settings */}
-            {keyType === 'restricted' && isWatchConnected && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Restriction Settings</Text>
-                
-                {/* Recipient Whitelist */}
-                <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>Recipient Whitelist</Text>
-                  <View style={styles.whitelistToggle}>
-                    <TouchableOpacity
-                      style={[
-                        styles.toggleOption,
-                        allowEveryone && styles.toggleOptionSelected
-                      ]}
-                      onPress={() => setAllowEveryone(true)}
-                    >
-                      <Text style={[
-                        styles.toggleText,
-                        allowEveryone && styles.toggleTextSelected
-                      ]}>
-                        Allow Everyone
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.toggleOption,
-                        !allowEveryone && styles.toggleOptionSelected
-                      ]}
-                      onPress={() => setAllowEveryone(false)}
-                    >
-                      <Text style={[
-                        styles.toggleText,
-                        !allowEveryone && styles.toggleTextSelected
-                      ]}>
-                        Whitelist Only
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {!allowEveryone && (
-                    <View style={styles.whitelistContainer}>
-                      <View style={styles.addAddressContainer}>
-                        <TextInput
-                          style={styles.addressInput}
-                          placeholder="0x..."
-                          placeholderTextColor="#666666"
-                          value={newAddress}
-                          onChangeText={setNewAddress}
-                        />
-                        <TouchableOpacity
-                          style={styles.addButton}
-                          onPress={addWhitelistAddress}
-                        >
-                          <IconSymbol name="plus" size={16} color="#FFFFFF" />
-                        </TouchableOpacity>
-                      </View>
-                      
-                      {whitelistAddresses.map((address, index) => (
-                        <View key={index} style={styles.addressItem}>
-                          <Text style={styles.addressText}>{address}</Text>
-                          <TouchableOpacity
-                            style={styles.removeButton}
-                            onPress={() => removeWhitelistAddress(index)}
-                          >
-                            <IconSymbol name="xmark" size={16} color="#EF4444" />
-                          </TouchableOpacity>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-
-                {/* Token Limits */}
-                <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>Token Spending Limits</Text>
-                  
-                  {tokenLimits.map((token, index) => (
-                    <View key={index} style={styles.tokenLimitItem}>
-                      <View style={styles.tokenInfo}>
-                        <Text style={styles.tokenSymbol}>{token.tokenSymbol}</Text>
-                        <Text style={styles.tokenAddress}>{token.tokenAddress.slice(0, 10)}...</Text>
-                      </View>
-                      <View style={styles.limitInfo}>
-                        <Text style={styles.limitText}>Max/Day: {token.maxAmountPerDay}</Text>
-                        <Text style={styles.limitText}>Max/Tx: {token.maxAmountPerTx}</Text>
-                      </View>
-                      <TouchableOpacity
-                        style={styles.removeButton}
-                        onPress={() => removeTokenLimit(index)}
-                      >
-                        <IconSymbol name="xmark" size={16} color="#EF4444" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-
-                  <View style={styles.addTokenContainer}>
-                    <TextInput
-                      style={styles.tokenInput}
-                      placeholder="Token Address"
-                      placeholderTextColor="#666666"
-                      value={newTokenAddress}
-                      onChangeText={setNewTokenAddress}
-                    />
-                    <TextInput
-                      style={styles.tokenInput}
-                      placeholder="Symbol"
-                      placeholderTextColor="#666666"
-                      value={newTokenSymbol}
-                      onChangeText={setNewTokenSymbol}
-                    />
-                    <TextInput
-                      style={styles.tokenInput}
-                      placeholder="Max/Day"
-                      placeholderTextColor="#666666"
-                      value={newTokenMaxDay}
-                      onChangeText={setNewTokenMaxDay}
-                      keyboardType="decimal-pad"
-                    />
-                    <TextInput
-                      style={styles.tokenInput}
-                      placeholder="Max/Tx"
-                      placeholderTextColor="#666666"
-                      value={newTokenMaxTx}
-                      onChangeText={setNewTokenMaxTx}
-                      keyboardType="decimal-pad"
-                    />
-                    <TouchableOpacity
-                      style={styles.addButton}
-                      onPress={addTokenLimit}
-                    >
-                      <IconSymbol name="plus" size={16} color="#FFFFFF" />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            )}
 
 
             {/* Create Button */}
             <TouchableOpacity 
               style={[
                 styles.createButton, 
-                (isConnecting || !isWatchConnected) && styles.createButtonDisabled
+                (isConnecting || !isWatchConnected || !isRestrictedValid()) && styles.createButtonDisabled
               ]}
               onPress={handleCreateKey}
-              disabled={isConnecting || !isWatchConnected}
+              disabled={isConnecting || !isWatchConnected || !isRestrictedValid()}
             >
               {isConnecting ? (
                 <>
@@ -1065,8 +1246,21 @@ export default function CreateDelegatedKeyScreen() {
               
               <View style={styles.targetModalContent}>
                 <Text style={styles.targetModalDescription}>
-                  Enter the smart contract address your watch will be allowed to interact with.
+                  Enter a name and the smart contract address your watch will be allowed to interact with.
                 </Text>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Name</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={newTargetName}
+                    onChangeText={setNewTargetName}
+                    placeholder="e.g., Alisa, Uniswap, My Wallet"
+                    placeholderTextColor="#666666"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                </View>
                 
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Contract Address</Text>
@@ -1107,6 +1301,206 @@ export default function CreateDelegatedKeyScreen() {
           </View>
         </Modal>
 
+        {/* Action Selector Modal */}
+        <Modal
+          visible={showActionSelector}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowActionSelector(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.actionModal}>
+              <View style={styles.actionModalHeader}>
+                <Text style={styles.actionModalTitle}>Select Actions</Text>
+                <TouchableOpacity
+                  onPress={() => setShowActionSelector(false)}
+                  style={styles.closeButton}
+                >
+                  <IconSymbol name="xmark" size={20} color="#666666" />
+                </TouchableOpacity>
+              </View>
+              
+              <View style={styles.searchContainer}>
+                <IconSymbol name="magnifyingglass" size={16} color="#666666" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search actions..."
+                  placeholderTextColor="#666666"
+                  value={actionSearchQuery}
+                  onChangeText={setActionSearchQuery}
+                />
+              </View>
+              
+              <ScrollView style={styles.actionList}>
+                {filteredActions.map((action) => (
+                  <TouchableOpacity
+                    key={action.id}
+                    style={[
+                      styles.actionListItem,
+                      callPolicySettings.allowedActions.includes(action.id) && styles.actionListItemSelected
+                    ]}
+                    onPress={() => addAction(action.id)}
+                    disabled={callPolicySettings.allowedActions.includes(action.id)}
+                  >
+                    <View style={styles.actionListItemContent}>
+                      <View style={styles.actionListItemHeader}>
+                        <Text style={[
+                          styles.actionListItemName,
+                          callPolicySettings.allowedActions.includes(action.id) && styles.actionListItemNameSelected
+                        ]}>
+                          {action.name}
+                        </Text>
+                        <View style={[
+                          styles.actionListItemBadge,
+                          action.category === 'transfer' && styles.transferBadge,
+                          action.category === 'approve' && styles.approveBadge,
+                          action.category === 'swap' && styles.swapBadge,
+                          action.category === 'stake' && styles.stakeBadge,
+                          action.category === 'other' && styles.otherBadge
+                        ]}>
+                          <Text style={styles.actionListItemBadgeText}>{action.category}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.actionListItemDescription}>{action.description}</Text>
+                      <Text style={styles.actionListItemSelector}>Selector: {action.selector}</Text>
+                    </View>
+                    {callPolicySettings.allowedActions.includes(action.id) && (
+                      <IconSymbol name="checkmark" size={20} color="#10B981" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Transfer Options Modal */}
+        <Modal
+          visible={showTransferOptions}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowTransferOptions(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.transferModal}>
+              <View style={styles.transferModalHeader}>
+                <Text style={styles.transferModalTitle}>Transfer Options</Text>
+                <TouchableOpacity
+                  onPress={() => setShowTransferOptions(false)}
+                  style={styles.closeButton}
+                >
+                  <IconSymbol name="xmark" size={20} color="#666666" />
+                </TouchableOpacity>
+              </View>
+              
+              <View style={styles.transferOptionsContainer}>
+                <Text style={styles.transferOptionsDescription}>
+                  Choose what types of transfers this delegated key can perform:
+                </Text>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.transferOption,
+                    transferOptions.eth && styles.transferOptionSelected
+                  ]}
+                  onPress={() => {
+                    // Prevent unchecking if it's the only option selected
+                    if (transferOptions.eth && !transferOptions.erc20) {
+                      return;
+                    }
+                    setTransferOptions(prev => ({ ...prev, eth: !prev.eth }));
+                  }}
+                >
+                  <View style={styles.transferOptionContent}>
+                    <IconSymbol 
+                      name="bitcoinsign.circle.fill" 
+                      size={24} 
+                      color={transferOptions.eth ? '#10B981' : '#666666'} 
+                    />
+                    <View style={styles.transferOptionText}>
+                      <Text style={[
+                        styles.transferOptionTitle,
+                        transferOptions.eth && styles.transferOptionTitleSelected
+                      ]}>
+                        ETH Transfers
+                      </Text>
+                      <Text style={styles.transferOptionDescription}>
+                        Send native ETH to any address
+                      </Text>
+                    </View>
+                    <View style={[
+                      styles.checkbox,
+                      transferOptions.eth && styles.checkboxSelected
+                    ]}>
+                      {transferOptions.eth && (
+                        <IconSymbol name="checkmark" size={16} color="#FFFFFF" />
+                      )}
+                    </View>
+                  </View>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.transferOption,
+                    transferOptions.erc20 && styles.transferOptionSelected
+                  ]}
+                  onPress={() => {
+                    // Prevent unchecking if it's the only option selected
+                    if (transferOptions.erc20 && !transferOptions.eth) {
+                      return;
+                    }
+                    setTransferOptions(prev => ({ ...prev, erc20: !prev.erc20 }));
+                  }}
+                >
+                  <View style={styles.transferOptionContent}>
+                    <IconSymbol 
+                      name="dollarsign.circle.fill" 
+                      size={24} 
+                      color={transferOptions.erc20 ? '#10B981' : '#666666'} 
+                    />
+                    <View style={styles.transferOptionText}>
+                      <Text style={[
+                        styles.transferOptionTitle,
+                        transferOptions.erc20 && styles.transferOptionTitleSelected
+                      ]}>
+                        ERC20 Token Transfers
+                      </Text>
+                      <Text style={styles.transferOptionDescription}>
+                        Send ERC20 tokens to any address
+                      </Text>
+                    </View>
+                    <View style={[
+                      styles.checkbox,
+                      transferOptions.erc20 && styles.checkboxSelected
+                    ]}>
+                      {transferOptions.erc20 && (
+                        <IconSymbol name="checkmark" size={16} color="#FFFFFF" />
+                      )}
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              </View>
+              
+              <View style={styles.transferModalFooter}>
+                <TouchableOpacity
+                  style={styles.transferCancelButton}
+                  onPress={() => setShowTransferOptions(false)}
+                >
+                  <Text style={styles.transferCancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.transferConfirmButton}
+                  onPress={confirmTransferOptions}
+                >
+                  <Text style={styles.transferConfirmButtonText}>
+                    Confirm
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Address Confirmation Modal */}
         <Modal
           visible={showAddressConfirmation}
@@ -1129,7 +1523,7 @@ export default function CreateDelegatedKeyScreen() {
                 <View style={styles.addressContainer}>
                   <Text style={styles.addressLabel}>Generated Address:</Text>
                   <View style={styles.addressDisplay}>
-                    <Text style={styles.confirmationAddressText}>{pendingKeyPair.address}</Text>
+                    <Text style={styles.confirmationAddressText} numberOfLines={0}>{pendingKeyPair.address}</Text>
                     <TouchableOpacity
                       style={styles.copyButton}
                       onPress={async () => {
@@ -1282,6 +1676,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#EF4444',
   },
+  inputErrorText: {
+    fontSize: 12,
+    color: '#EF4444',
+    marginTop: 4,
+  },
   warningContainer: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1410,11 +1809,21 @@ const styles = StyleSheet.create({
   subsection: {
     marginBottom: 24,
   },
+  subsectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
   subsectionTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 12,
+  },
+  requiredIndicator: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#EF4444',
   },
   whitelistToggle: {
     flexDirection: 'row',
@@ -1664,10 +2073,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
   },
   confirmationAddressText: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 12,
     color: '#FFFFFF',
     fontFamily: 'monospace',
     backgroundColor: '#1A1A1A',
@@ -1675,6 +2085,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#333333',
+    lineHeight: 16,
   },
   copyButton: {
     padding: 12,
@@ -1930,11 +2341,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#333333',
   },
-  targetAddress: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    fontFamily: 'monospace',
+  targetInfo: {
     flex: 1,
+  },
+  targetName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  targetAddress: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    fontFamily: 'monospace',
   },
   addTargetButton: {
     flexDirection: 'row',
@@ -2036,6 +2455,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#FFFFFF',
   },
+  limitInputError: {
+    borderColor: '#EF4444',
+  },
   
   // Summary Styles
   summaryContainer: {
@@ -2063,7 +2485,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A1A',
     borderRadius: 16,
     margin: 20,
-    maxHeight: '60%',
+    maxHeight: '75%',
     borderWidth: 1,
     borderColor: '#333333',
   },
@@ -2151,7 +2573,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   inputGroup: {
-    marginBottom: 16,
+    marginBottom: 20,
   },
   inputLabel: {
     fontSize: 14,
@@ -2167,5 +2589,354 @@ const styles = StyleSheet.create({
     borderColor: '#333333',
     fontSize: 14,
     color: '#FFFFFF',
+  },
+  
+  // Selected Actions Styles
+  selectedActionsContainer: {
+    marginBottom: 12,
+  },
+  selectedActionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  
+  // Transfer Card Styles
+  transferCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  transferCardEnabled: {
+    borderColor: '#10B981',
+    backgroundColor: '#0F1A0F',
+  },
+  transferCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  transferCardInfo: {
+    flex: 1,
+  },
+  transferCardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#666666',
+    marginBottom: 4,
+  },
+  transferCardTitleEnabled: {
+    color: '#FFFFFF',
+  },
+  transferCardDescription: {
+    fontSize: 12,
+    color: '#CCCCCC',
+    marginBottom: 8,
+  },
+  transferStatusContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  transferStatusItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  transferStatusText: {
+    fontSize: 12,
+    color: '#10B981',
+    fontWeight: '500',
+  },
+  transferCardControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  transferToggle: {
+    width: 44,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#333333',
+    padding: 2,
+    justifyContent: 'center',
+  },
+  transferToggleEnabled: {
+    backgroundColor: '#10B981',
+  },
+  transferToggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    alignSelf: 'flex-start',
+  },
+  transferToggleThumbEnabled: {
+    alignSelf: 'flex-end',
+  },
+  transferSettingsButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#0F0F0F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  selectedActionInfo: {
+    flex: 1,
+  },
+  selectedActionName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 2,
+  },
+  selectedActionDescription: {
+    fontSize: 12,
+    color: '#A0A0A0',
+  },
+  removeActionButton: {
+    padding: 4,
+  },
+  addActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    borderStyle: 'dashed',
+  },
+  addActionText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#10B981',
+    marginLeft: 8,
+  },
+  
+  // Action Selector Modal Styles
+  actionModal: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    margin: 40,
+    maxHeight: '70%',
+    minHeight: '50%',
+    width: '90%',
+    alignSelf: 'center',
+  },
+  actionModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333333',
+  },
+  actionModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0F0F0F',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    margin: 20,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#FFFFFF',
+    marginLeft: 8,
+  },
+  actionList: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  actionListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#0F0F0F',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  actionListItemSelected: {
+    backgroundColor: '#1A2E0A',
+    borderColor: '#10B981',
+  },
+  actionListItemContent: {
+    flex: 1,
+  },
+  actionListItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  actionListItemName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  actionListItemNameSelected: {
+    color: '#10B981',
+  },
+  actionListItemBadge: {
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  actionListItemBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  actionListItemDescription: {
+    fontSize: 12,
+    color: '#A0A0A0',
+    marginBottom: 2,
+  },
+  actionListItemSelector: {
+    fontSize: 10,
+    color: '#666666',
+    fontFamily: 'monospace',
+  },
+  
+  // Transfer Options Modal Styles
+  transferModal: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    margin: 40,
+    maxHeight: '60%',
+    width: '90%',
+    alignSelf: 'center',
+  },
+  transferModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333333',
+  },
+  transferModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  transferOptionsContainer: {
+    padding: 20,
+  },
+  transferOptionsDescription: {
+    fontSize: 14,
+    color: '#CCCCCC',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  transferOption: {
+    backgroundColor: '#0F0F0F',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  transferOptionSelected: {
+    borderColor: '#10B981',
+    backgroundColor: '#0F1A0F',
+  },
+  transferOptionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  transferOptionText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  transferOptionTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  transferOptionTitleSelected: {
+    color: '#10B981',
+  },
+  transferOptionDescription: {
+    fontSize: 12,
+    color: '#CCCCCC',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#333333',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#10B981',
+    borderColor: '#10B981',
+  },
+  transferModalFooter: {
+    flexDirection: 'row',
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#333333',
+    gap: 12,
+  },
+  transferCancelButton: {
+    flex: 1,
+    backgroundColor: '#333333',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  transferCancelButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  transferConfirmButton: {
+    flex: 1,
+    backgroundColor: '#10B981',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  transferConfirmButtonDisabled: {
+    backgroundColor: '#333333',
+  },
+  transferConfirmButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  transferConfirmButtonTextDisabled: {
+    color: '#666666',
   },
 });

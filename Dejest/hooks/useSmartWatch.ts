@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { smartWatchBridge, WatchKeyPair, WatchPermissionData } from '@/utils/smartWatchBridge';
+import { smartWatchBridge, WatchKeyPair, WatchPermissionData, WatchGenarteKeyData } from '@/utils/smartWatchBridge';
 
 export interface UseSmartWatchReturn {
   isConnected: boolean;
   isLoading: boolean;
   error: string | null;
-  requestKeyGeneration: (data: { kernelAddress: string }) => Promise<WatchKeyPair>;
+  requestKeyGeneration: (data: WatchGenarteKeyData) => Promise<WatchKeyPair>;
   syncPermissionData: (data: WatchPermissionData) => Promise<boolean>;
   checkConnection: () => Promise<boolean>;
   clearError: () => void;
@@ -40,7 +40,7 @@ export const useSmartWatch = (): UseSmartWatchReturn => {
     }
   }, []);
 
-  const requestKeyGeneration = useCallback(async (data: { kernelAddress: string }): Promise<WatchKeyPair> => {
+  const requestKeyGeneration = useCallback(async (data: WatchGenarteKeyData): Promise<WatchKeyPair> => {
     try {
       setIsLoading(true);
       setError(null);
@@ -49,7 +49,7 @@ export const useSmartWatch = (): UseSmartWatchReturn => {
         throw new Error('Smart watch is not connected');
       }
 
-      console.log('[useSmartWatch] -> Calling requestKeyGeneration with kernelAddress:', data);
+      console.log('[useSmartWatch] -> Calling requestKeyGeneration with data:', data);
       const keyPair = await smartWatchBridge.requestKeyGeneration(data);
       return keyPair;
     } catch (err) {
