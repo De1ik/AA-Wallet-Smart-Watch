@@ -1074,6 +1074,75 @@ export async function fetchCallPolicyPermissions(
     }
     return { packed, unpacked, userOpHash };
   }
+
+  // ===== ERC20 Token Transfer =====
+  export async function buildSendTokenUO(tokenAddress: Address, to: Address, amount: bigint, nonceKey = 0) {
+    // ERC20 transfer function ABI
+    const erc20Abi = parseAbi([
+      'function transfer(address to, uint256 amount) returns (bool)'
+    ]);
+
+    // Encode ERC20 transfer call
+    const transferCalldata = encodeFunctionData({
+      abi: erc20Abi,
+      functionName: 'transfer',
+      args: [to, amount]
+    });
+
+    // Execute the transfer on the token contract
+    const execData = encodeSingle(tokenAddress, 0n, transferCalldata);
+    const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+
+    // Get dynamic gas prices and optimized gas limits
+    const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
+    const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits('install');
+    
+    const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
+    const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
+
+    // root lane key (mode=0x00,type=0x00)
+    const key192 = '0x' + '00'.repeat(24) as Hex;
+    const nonce64 = await publicClient.readContract({
+      address: ENTRY_POINT,
+      abi: entryPointAbi,
+      functionName: 'getNonce',
+      args: [KERNEL, BigInt(key192)],
+    }) as bigint;
+    const nonceFull = nonce64;
+
+    const packed: PackedUserOperation = {
+      sender: KERNEL,
+      nonce: nonceFull,
+      initCode: '0x',
+      callData,
+      accountGasLimits,
+      preVerificationGas,
+      gasFees,
+      paymasterAndData: '0x',
+      signature: '0x'
+    };
+
+    const userOpHash = await publicClient.readContract({
+      address: ENTRY_POINT,
+      abi: entryPointAbi,
+      functionName: 'getUserOpHash',
+      args: [packed]
+    }) as Hex;
+
+    const unpacked: UnpackedUserOperationV07 = {
+      sender: KERNEL,
+      nonce: toHex(nonceFull),
+      callData,
+      callGasLimit: toHex(callGasLimit),
+      verificationGasLimit: toHex(verificationGasLimit),
+      preVerificationGas: toHex(preVerificationGas),
+      maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
+      maxFeePerGas: toHex(maxFeePerGas),
+      signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex, // root ECDSA
+    };
+
+    return { packed, unpacked, userOpHash };
+  }
   
   // ===== STEP 1: INSTALL permission (root lane) =====
   export async function buildInstallPermissionUO(delegatedEOA: Address) {
@@ -1674,4 +1743,523 @@ export async function fetchCallPolicyPermissions(
   
   // main().catch((e) => { console.error(e); process.exit(1) })
   // console.log('0x' + '00'.repeat(24) as Hex)
+  
+// ===== BALANCE FETCHING =====
+
+/**
+ * Token metadata for Sepolia network
+ */
+export interface TokenMetadata {
+  address: Address;
+  symbol: string;
+  name: string;
+  decimals: number;
+  color: string;
+}
+
+// Popular ERC20 tokens on Sepolia
+export const SEPOLIA_TOKENS: TokenMetadata[] = [
+  {
+    address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984' as Address, // UNI
+    symbol: 'UNI',
+    name: 'Uniswap',
+    decimals: 18,
+    color: '#FF007A',
+  },
+  {
+    address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14' as Address, // WETH on Sepolia
+    symbol: 'WETH',
+    name: 'Wrapped Ether',
+    decimals: 18,
+    color: '#627EEA',
+  },
+  {
+    address: '0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0' as Address, // USDT on Sepolia
+    symbol: 'USDT',
+    name: 'Tether USD',
+    decimals: 6,
+    color: '#26a17b',
+  },
+  {
+    address: '0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8' as Address, // USDC on Sepolia
+    symbol: 'USDC',
+    name: 'USD Coin',
+    decimals: 6,
+    color: '#2775CA',
+  },
+  {
+    address: '0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357' as Address, // DAI on Sepolia
+    symbol: 'DAI',
+    name: 'Dai Stablecoin',
+    decimals: 18,
+    color: '#F5AC37',
+  },
+];
+
+/**
+ * Fetch all token balances for a given address on Sepolia
+ */
+export async function fetchAllTokenBalances(address: Address): Promise<{
+  ethBalance: string;
+  tokens: Array<{
+    symbol: string;
+    name: string;
+    balance: string;
+    value: number;
+    decimals: number;
+    address: string;
+    color: string;
+    amount: string;
+  }>;
+}> {
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(ETH_RPC_URL),
+  });
+
+  // ERC20 ABI for balanceOf
+  const erc20Abi = parseAbi([
+    'function balanceOf(address owner) view returns (uint256)',
+    'function decimals() view returns (uint8)',
+    'function symbol() view returns (string)',
+    'function name() view returns (string)',
+  ]);
+
+  try {
+    // Get ETH balance
+    const ethBalanceWei = await publicClient.getBalance({ address });
+    const ethBalance = formatEther(ethBalanceWei);
+
+    console.log(`[Balance] ETH balance for ${address}: ${ethBalance} ETH`);
+
+    // Get token balances
+    const tokenBalances = await Promise.all(
+      SEPOLIA_TOKENS.map(async (token) => {
+        try {
+          const balanceWei = await publicClient.readContract({
+            address: token.address,
+            abi: erc20Abi,
+            functionName: 'balanceOf',
+            args: [address],
+          });
+
+          // Get actual decimals from contract
+          let decimals = token.decimals;
+          try {
+            decimals = await publicClient.readContract({
+              address: token.address,
+              abi: erc20Abi,
+              functionName: 'decimals',
+            });
+          } catch (e) {
+            console.warn(`[Balance] Could not fetch decimals for ${token.symbol}, using default ${token.decimals}`);
+          }
+
+          // Format balance based on actual decimals (not always 18)
+          const divisor = BigInt(10 ** Number(decimals));
+          const balance = (Number(balanceWei) / Number(divisor)).toFixed(decimals);
+          const hasBalance = balanceWei > 0n;
+
+          console.log(`[Balance] ${token.symbol} balance for ${address}: ${balance} ${token.symbol}`);
+
+          return {
+            symbol: token.symbol,
+            name: token.name,
+            balance,
+            value: 0, // Will be calculated on client side based on current prices
+            decimals,
+            address: token.address,
+            color: token.color,
+            amount: balance,
+            hasBalance,
+          };
+        } catch (error) {
+          console.warn(`[Balance] Error fetching balance for ${token.symbol}:`, error);
+          return null;
+        }
+      })
+    );
+
+    // Filter out null results and tokens with zero balance, and assert types
+    const validTokens = tokenBalances.filter((token): token is NonNullable<typeof token> => 
+      token !== null && token.hasBalance
+    );
+
+    // Add ETH to the list if it has balance
+    const tokensWithEth: Array<{
+      symbol: string;
+      name: string;
+      balance: string;
+      value: number;
+      decimals: number;
+      address: string;
+      color: string;
+      amount: string;
+      hasBalance: boolean;
+    }> = [];
+    
+    if (parseFloat(ethBalance) > 0) {
+      tokensWithEth.push({
+        symbol: 'ETH',
+        name: 'Ethereum',
+        balance: ethBalance,
+        value: 0,
+        decimals: 18,
+        address: '0x0000000000000000000000000000000000000000',
+        color: '#627EEA',
+        amount: ethBalance,
+        hasBalance: true,
+      });
+    }
+
+    // Combine ETH and other tokens, sorted by balance (highest first)
+    const allTokens = [...tokensWithEth, ...validTokens].sort((a, b) => {
+      const balA = parseFloat(a.amount);
+      const balB = parseFloat(b.amount);
+      return balB - balA;
+    });
+
+    return {
+      ethBalance,
+      tokens: allTokens.filter((t) => t.hasBalance),
+    };
+  } catch (error) {
+    console.error('[Balance] Error fetching balances:', error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch transaction history for a given address
+ * This fetches ETH transfers, internal transactions, and token transfers using Alchemy
+ */
+export async function fetchTransactionHistory(
+  address: Address,
+  limit: number = 20
+): Promise<Array<{
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  timestamp: number;
+  type: 'sent' | 'received';
+  status: 'success' | 'pending' | 'failed';
+  tokenSymbol?: string;
+  tokenAddress?: string;
+  eventType?: string;
+}>> {
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(ETH_RPC_URL),
+  });
+
+  // Check if Alchemy is configured
+  let alchemyApiKey = process.env.ALCHEMY_API_KEY;
+
+  // ERC20 ABI
+  const erc20Abi = parseAbi([
+    'function balanceOf(address owner) view returns (uint256)',
+    'function decimals() view returns (uint8)',
+    'function symbol() view returns (string)',
+    'function name() view returns (string)',
+  ]);
+
+  try {
+    console.log(`[Transaction History] Fetching transactions for ${address} (limited to ${limit})`);
+    
+    const allTransactions: Array<{
+      hash: string;
+      from: string;
+      to: string;
+      value: string;
+      timestamp: number;
+      type: 'sent' | 'received';
+      status: 'success' | 'pending' | 'failed';
+      tokenSymbol?: string;
+      tokenAddress?: string;
+      eventType?: string;
+    }> = [];
+
+    // Use Alchemy if API key is configured
+    if (alchemyApiKey) {
+      try {
+        const { Alchemy, Network, AssetTransfersCategory } = await import('alchemy-sdk');
+        
+        const config = {
+          apiKey: alchemyApiKey,
+          network: Network.ETH_SEPOLIA,
+        };
+        
+        const alchemy = new Alchemy(config);
+        
+        console.log(`[Transaction History] Using Alchemy to fetch transactions`);
+        
+        // Fetch all asset transfers (ETH, ERC20, ERC721, ERC1155, etc.)
+        const transfers = await alchemy.core.getAssetTransfers({
+          fromBlock: '0x0', // From genesis
+          toBlock: 'latest',
+          fromAddress: address,
+          category: [
+            AssetTransfersCategory.EXTERNAL,
+            AssetTransfersCategory.ERC20,
+            AssetTransfersCategory.ERC721,
+            AssetTransfersCategory.ERC1155,
+            AssetTransfersCategory.INTERNAL // Include internal transactions
+          ],
+          withMetadata: true,
+          maxCount: limit * 3, // Get extra to filter and include internal txns
+        });
+
+        // Also get transfers TO this address
+        const transfersTo = await alchemy.core.getAssetTransfers({
+          fromBlock: '0x0',
+          toBlock: 'latest',
+          toAddress: address,
+          category: [
+            AssetTransfersCategory.EXTERNAL,
+            AssetTransfersCategory.ERC20,
+            AssetTransfersCategory.ERC721,
+            AssetTransfersCategory.ERC1155,
+            AssetTransfersCategory.INTERNAL // Include internal transactions
+          ],
+          withMetadata: true,
+          maxCount: limit * 3,
+        });
+
+        console.log(`[Transaction History] Found ${transfers.transfers.length} outbound and ${transfersTo.transfers.length} inbound transfers`);
+
+        // Combine and deduplicate transfers (use a Set to track unique hashes)
+        const combinedTransfers = [...transfers.transfers, ...transfersTo.transfers];
+        const seenHashes = new Set<string>();
+        const deduplicatedTransfers = combinedTransfers.filter(transfer => {
+          if (transfer.hash && seenHashes.has(transfer.hash)) {
+            return false;
+          }
+          if (transfer.hash) seenHashes.add(transfer.hash);
+          return true;
+        });
+
+        for (const transfer of deduplicatedTransfers) {
+          try {
+            // Determine if this is a send or receive
+            if (!transfer.to || !transfer.from) continue;
+            const isReceived = transfer.to.toLowerCase() === address.toLowerCase();
+            
+            // Get timestamp from metadata if available
+            let timestamp = Date.now();
+            if (transfer.metadata?.blockTimestamp) {
+              timestamp = new Date(transfer.metadata.blockTimestamp).getTime();
+            } else if (transfer.blockNum) {
+              // Try to get block timestamp
+              const blockNum = transfer.blockNum ? parseInt(transfer.blockNum, 16) : undefined;
+              if (blockNum) {
+                const block = await publicClient.getBlock({ blockNumber: BigInt(blockNum) });
+                timestamp = Number(block.timestamp) * 1000;
+              }
+            }
+
+            // Format value based on decimals
+            let valueStr = '0';
+            let tokenSymbol = 'ETH';
+            let numericValue = 0;
+            
+            if (transfer.erc1155Metadata) {
+              // ERC1155 NFT
+              valueStr = transfer.erc1155Metadata.length.toString();
+              tokenSymbol = 'NFT';
+              numericValue = parseFloat(valueStr);
+            } else if (transfer.erc721TokenId) {
+              // ERC721 NFT
+              valueStr = '1';
+              tokenSymbol = 'NFT';
+              numericValue = 1;
+            } else if (transfer.rawContract?.decimal) {
+              // Token with decimals (could be ERC20, ETH with contract info, etc.)
+              const decimals = parseInt(transfer.rawContract.decimal);
+              const rawValueStr = transfer.value?.toString() || '0';
+              let calculatedValue = 0;
+              
+              try {
+                // Check if value is already in decimal format (human-readable)
+                if (rawValueStr.includes('.') || rawValueStr.includes('e') || rawValueStr.includes('E')) {
+                  // Already in human-readable format - don't divide again!
+                  calculatedValue = parseFloat(rawValueStr);
+                } else if (transfer.category === 'erc20' || transfer.category === 'erc1155' || transfer.category === 'erc721') {
+                  // For ERC20 tokens, Alchemy's transfer.value is ALREADY in human-readable format!
+                  // Don't divide, just use it as-is
+                  calculatedValue = parseFloat(rawValueStr);
+                } else {
+                  // For other cases, parse as big integer and divide
+                  const rawValue = BigInt(rawValueStr);
+                  const divisor = BigInt(10 ** decimals);
+                  calculatedValue = Number(rawValue) / Number(divisor);
+                }
+              } catch (error) {
+                console.error(`[Transaction History] Error parsing value "${rawValueStr}":`, error);
+                calculatedValue = parseFloat(rawValueStr) || 0;
+              }
+              
+              numericValue = calculatedValue;
+              
+              // Format appropriately
+              if (calculatedValue === 0) {
+                valueStr = '0';
+              } else if (calculatedValue < 0.0001) {
+                valueStr = calculatedValue.toFixed(18).replace(/\.?0+$/, '');
+              } else {
+                valueStr = calculatedValue.toFixed(8).replace(/\.?0+$/, '');
+              }
+              tokenSymbol = 'TOKEN';
+            } else {
+              // No contract info - assume ETH transfer
+              const ethValue = parseFloat(transfer.value?.toString() || '0');
+              numericValue = ethValue;
+              
+              if (ethValue === 0) {
+                valueStr = '0';
+              } else if (ethValue < 0.0001) {
+                valueStr = ethValue.toFixed(18).replace(/\.?0+$/, '');
+              } else {
+                valueStr = ethValue.toFixed(8).replace(/\.?0+$/, '');
+              }
+              tokenSymbol = 'ETH';
+            }
+
+            // Parse asset symbol if available
+            if (transfer.asset) {
+              tokenSymbol = transfer.asset;
+            }
+
+            // Skip transactions with zero value unless they're internal transactions (smart wallet executions)
+            // Internal transactions (even with 0 value) are important to show
+            const isInternal = transfer.category === AssetTransfersCategory.INTERNAL;
+            if (numericValue === 0 && !isInternal) {
+              continue; // Skip zero-value external transfers
+            }
+
+            // Try to get transaction receipt to determine status
+            let status: 'success' | 'pending' | 'failed' = 'success';
+            try {
+              if (transfer.hash) {
+                const receipt = await publicClient.getTransactionReceipt({ hash: transfer.hash as `0x${string}` });
+                status = receipt ? (receipt.status === 'success' ? 'success' : 'failed') : 'pending';
+              }
+            } catch (error) {
+              status = 'pending';
+            }
+
+            allTransactions.push({
+              hash: transfer.hash || '0x',
+              from: transfer.from || '0x0000000000000000000000000000000000000000',
+              to: transfer.to || '0x0000000000000000000000000000000000000000',
+              value: valueStr,
+              timestamp: Math.floor(timestamp / 1000), // Convert to seconds
+              type: isReceived ? 'received' : 'sent',
+              status,
+              tokenSymbol,
+              tokenAddress: transfer.rawContract?.address || undefined,
+              eventType: isInternal ? 'internal_transaction' : transfer.category,
+            });
+
+          } catch (transferError) {
+            console.warn(`[Transaction History] Error processing transfer:`, transferError);
+          }
+        }
+
+        console.log(`[Transaction History] Processed ${allTransactions.length} transfers from Alchemy`);
+        
+      } catch (alchemyError: any) {
+        console.error('[Transaction History] Alchemy error:', alchemyError);
+        console.log('[Transaction History] Falling back to standard RPC queries');
+        
+        // Fall back to standard implementation below
+        alchemyApiKey = undefined; // Will trigger fallback
+      }
+    }
+
+    // Fallback: Use standard RPC if Alchemy is not configured or failed
+    if (!alchemyApiKey || allTransactions.length === 0) {
+      console.log(`[Transaction History] Using fallback RPC queries`);
+      
+      // Fallback implementation - fetch Transfer events for supported tokens
+      const currentBlock = await publicClient.getBlockNumber();
+      const fromBlock = currentBlock - BigInt(5000);
+      const toBlock = 'latest';
+
+      const transferEventAbi = parseAbi([
+        'event Transfer(address indexed from, address indexed to, uint256 value)',
+      ]);
+
+      for (const token of SEPOLIA_TOKENS) {
+        try {
+          const logsTo = await publicClient.getLogs({
+            address: token.address,
+            event: transferEventAbi[0],
+            args: { to: address },
+            fromBlock,
+            toBlock,
+          });
+
+          const logsFrom = await publicClient.getLogs({
+            address: token.address,
+            event: transferEventAbi[0],
+            args: { from: address },
+            fromBlock,
+            toBlock,
+          });
+
+          for (const log of [...logsTo, ...logsFrom]) {
+            try {
+              const block = await publicClient.getBlock({ blockNumber: log.blockNumber });
+              const receipt = await publicClient.getTransactionReceipt({ hash: log.transactionHash });
+              const isReceived = log.args.to?.toLowerCase() === address.toLowerCase();
+              
+              let decimals = token.decimals;
+              try {
+                const decimalsData = await publicClient.readContract({
+                  address: token.address,
+                  abi: erc20Abi,
+                  functionName: 'decimals',
+                });
+                decimals = Number(decimalsData);
+              } catch (e) {}
+
+              const divisor = BigInt(10 ** decimals);
+              const valueStr = (Number(log.args.value) / Number(divisor)).toFixed(decimals);
+
+              allTransactions.push({
+                hash: log.transactionHash,
+                from: log.args.from || '0x0000000000000000000000000000000000000000',
+                to: log.args.to || '0x0000000000000000000000000000000000000000',
+                value: valueStr,
+                timestamp: Number(block.timestamp),
+                type: isReceived ? 'received' : 'sent',
+                status: receipt ? (receipt.status === 'success' ? 'success' : 'failed') : 'pending',
+                tokenSymbol: token.symbol,
+                tokenAddress: token.address,
+                eventType: 'token_transfer',
+              });
+            } catch (error) {
+              console.warn(`Error processing log:`, error);
+            }
+          }
+
+          console.log(`[Transaction History] Found ${logsTo.length + logsFrom.length} transfers for ${token.symbol}`);
+        } catch (error) {
+          console.warn(`[Transaction History] Error fetching transfers for ${token.symbol}:`, error);
+        }
+      }
+    }
+
+    // Sort transactions by timestamp (newest first) and limit
+    const sortedTransactions = allTransactions.sort((a, b) => b.timestamp - a.timestamp);
+    
+    console.log(`[Transaction History] Found ${sortedTransactions.length} total transactions`);
+    
+    return sortedTransactions.slice(0, limit);
+  } catch (error) {
+    console.error('[Transaction History] Error fetching transactions:', error);
+    return [];
+  }
+}
   

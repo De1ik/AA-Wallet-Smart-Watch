@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateSeedPhrase, validateSeedPhrase, generateWalletAddress, generatePrivateKey, generateWalletAccount, getPrivateKeyFromAccount, mockCryptoData } from '@/utils/crypto';
 import { predictSmartWalletAddress } from '@/utils/walletService';
+import { apiClient } from '@/utils/apiClient';
 
 export interface WalletData {
   seedPhrase: string[];
@@ -45,7 +46,7 @@ interface WalletContextType {
   createWallet: () => Promise<WalletData>;
   importWallet: (seedPhrase: string[]) => Promise<WalletData>;
   logout: () => Promise<void>;
-  refreshCryptoData: () => void;
+  refreshCryptoData: () => Promise<void>;
   checkWalletExists: () => Promise<boolean>;
   ensureSmartWalletAddress: () => Promise<string>;
 }
@@ -74,6 +75,141 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     loadWallet();
   }, []);
 
+  const fetchRealBalances = useCallback(async (address: string): Promise<CryptoData> => {
+    try {
+      console.log('[WalletContext] Fetching real balances for address:', address);
+      
+      // Use smart wallet address if available, otherwise use EOA address
+      const targetAddress = address;
+      const balances = await apiClient.getBalances(targetAddress);
+      
+      console.log('[WalletContext] Fetched balances:', balances);
+      
+      // Convert token balances to portfolio format (exclude ETH from tokens)
+      const ethBalance = parseFloat(balances.ethBalance);
+      const ethValue = ethBalance * 3500; // ETH price
+      
+      // Create ETH entry for portfolio
+      const ethEntry = {
+        id: 'ethereum',
+        name: 'Ethereum',
+        symbol: 'ETH',
+        amount: ethBalance,
+        value: ethValue,
+        change24h: 0,
+        color: '#627EEA',
+      };
+      
+      // Map other tokens (excluding ETH if it appears in the list)
+      const otherTokens = balances.tokens
+        .filter((token) => token.symbol.toUpperCase() !== 'ETH')
+        .map((token) => {
+          // Parse the amount based on decimals
+          const amount = parseFloat(token.amount);
+          
+          // Calculate USD value based on token symbol
+          let value = 0;
+          const symbol = token.symbol.toUpperCase();
+          
+          if (symbol === 'USDC' || symbol === 'USDT' || symbol === 'DAI' || symbol === 'USDCE') {
+            value = amount; // Stablecoins are 1:1 with USD
+          } else {
+            // For other tokens, try to estimate or set to 0
+            value = amount * 0;
+          }
+          
+          // Determine change (mock data for now)
+          const change24h = 0;
+          
+          // Generate color if not provided
+          const color = token.color || '#627EEA';
+          
+          return {
+            id: token.symbol.toLowerCase(),
+            name: token.name,
+            symbol: token.symbol,
+            amount,
+            value,
+            change24h,
+            color,
+          };
+        });
+      
+      // Combine ETH with other tokens
+      const portfolio = [ethEntry, ...otherTokens];
+      
+      // Calculate total balance (sum of all token values including ETH)
+      const totalBalance = portfolio.reduce((sum, token) => sum + token.value, 0);
+      
+      // Fetch transaction history
+      const txHistory = await apiClient.getTransactions(targetAddress, 20);
+      console.log('[WalletContext] Fetched transactions:', txHistory);
+      
+      // Format transactions for the app
+      const transactions = txHistory.transactions
+        .map((tx) => {
+          const timestamp = new Date(tx.timestamp * 1000);
+          const numericAmount = parseFloat(tx.value);
+          
+          // Skip zero-value transactions (unless they're important internal transactions)
+          if (numericAmount === 0 && tx.eventType !== 'internal_transaction') {
+            return null;
+          }
+          
+          // Use token symbol from transaction, default to ETH
+          const symbol = tx.tokenSymbol || 'ETH';
+          
+          // Map transaction types
+          const transactionType = tx.type === 'sent' ? 'send' as const : 'receive' as const;
+          
+          // Format amount to avoid scientific notation for display
+          let amountForDisplay = numericAmount;
+          if (numericAmount !== 0 && numericAmount < 0.0001) {
+            // For very small amounts, keep precision but avoid scientific notation
+            const fixedValue = numericAmount.toFixed(18);
+            // Remove trailing zeros but keep up to 10 significant digits
+            amountForDisplay = parseFloat(fixedValue);
+          }
+          
+          // Calculate USD value based on token type
+          let value = 0;
+          const upperSymbol = symbol.toUpperCase();
+          if (upperSymbol === 'ETH') {
+            value = numericAmount * 3500; // ETH price
+          } else if (upperSymbol === 'USDC' || upperSymbol === 'USDT' || upperSymbol === 'DAI' || upperSymbol === 'USDCE') {
+            value = numericAmount; // Stablecoins are 1:1 with USD
+          } else {
+            value = numericAmount * 0; // Unknown tokens, would need price API
+          }
+
+          return {
+            id: tx.hash,
+            type: transactionType,
+            from: tx.from !== targetAddress ? tx.from : undefined,
+            to: tx.to !== targetAddress ? tx.to : undefined,
+            amount: amountForDisplay,
+            symbol,
+            value,
+            timestamp,
+          };
+        })
+        .filter((tx): tx is NonNullable<typeof tx> => tx !== null); // Remove null entries
+      
+      const cryptoData: CryptoData = {
+        totalBalance,
+        change24h: 0, // Mock data
+        portfolio,
+        transactions,
+      };
+      
+      return cryptoData;
+    } catch (error) {
+      console.error('[WalletContext] Error fetching real balances:', error);
+      // Fallback to mock data
+      return mockCryptoData;
+    }
+  }, []);
+
   const loadWallet = async () => {
     try {
       const storedWallet = await AsyncStorage.getItem('wallet');
@@ -98,7 +234,17 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
         await AsyncStorage.setItem('wallet', JSON.stringify(updatedWallet));
         
         setWallet(updatedWallet);
-        setCryptoData(mockCryptoData);
+        
+        // Fetch real balances
+        try {
+          const address = updatedWallet.smartWalletAddress || updatedWallet.address;
+          const cryptoData = await fetchRealBalances(address);
+          setCryptoData(cryptoData);
+        } catch (error) {
+          console.error('Error fetching balances, using mock data:', error);
+          setCryptoData(mockCryptoData);
+        }
+        
         setIsAuthenticated(true);
       }
     } catch (error) {
@@ -140,8 +286,17 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
       await AsyncStorage.setItem('wallet', JSON.stringify(newWallet));
       
       setWallet(newWallet);
-      setCryptoData(mockCryptoData);
       setIsAuthenticated(true);
+      
+      // Fetch real balances
+      try {
+        const address = smartWalletAddress || account.address;
+        const cryptoData = await fetchRealBalances(address);
+        setCryptoData(cryptoData);
+      } catch (error) {
+        console.error('Error fetching balances for new wallet:', error);
+        setCryptoData(mockCryptoData);
+      }
       
       return newWallet;
     } catch (error) {
@@ -184,8 +339,17 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
       await AsyncStorage.setItem('wallet', JSON.stringify(importedWallet));
       
       setWallet(importedWallet);
-      setCryptoData(mockCryptoData);
       setIsAuthenticated(true);
+      
+      // Fetch real balances
+      try {
+        const address = smartWalletAddress || account.address;
+        const cryptoData = await fetchRealBalances(address);
+        setCryptoData(cryptoData);
+      } catch (error) {
+        console.error('Error fetching balances for imported wallet:', error);
+        setCryptoData(mockCryptoData);
+      }
       
       return importedWallet;
     } catch (error) {
@@ -245,10 +409,21 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     }
   };
 
-  const refreshCryptoData = () => {
-    // In a real app, this would fetch fresh data from an API
-    setCryptoData(mockCryptoData);
-  };
+  const refreshCryptoData = useCallback(async () => {
+    if (!wallet) {
+      setCryptoData(mockCryptoData);
+      return;
+    }
+    
+    try {
+      const address = wallet.smartWalletAddress || wallet.address;
+      const cryptoData = await fetchRealBalances(address);
+      setCryptoData(cryptoData);
+    } catch (error) {
+      console.error('Error refreshing crypto data:', error);
+      setCryptoData(mockCryptoData);
+    }
+  }, [wallet, fetchRealBalances]);
 
   const value: WalletContextType = {
     wallet,

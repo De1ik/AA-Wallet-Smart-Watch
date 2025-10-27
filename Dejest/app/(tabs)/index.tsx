@@ -1,14 +1,28 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, RefreshControl, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useWallet } from '@/contexts/WalletContext';
 import * as Clipboard from 'expo-clipboard';
+import { useRouter } from 'expo-router';
 
 export default function DashboardScreen() {
-  const { cryptoData, wallet } = useWallet();
+  const { cryptoData, wallet, refreshCryptoData } = useWallet();
+  const router = useRouter();
   const [balanceVisible, setBalanceVisible] = useState(true);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshCryptoData();
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const copyAddressToClipboard = async (address: string, type: string) => {
     try {
@@ -38,6 +52,20 @@ export default function DashboardScreen() {
     }).format(amount);
   };
 
+  const formatAmount = (amount: number) => {
+    // Avoid scientific notation for all amounts
+    if (amount === 0) return '0';
+    
+    // For very small amounts, use more decimal places
+    if (amount < 0.0001 && amount > 0) {
+      // Use toFixed with up to 18 decimals and remove trailing zeros
+      return amount.toFixed(18).replace(/\.?0+$/, '');
+    }
+    
+    // For normal amounts, use standard formatting
+    return amount.toString();
+  };
+
   const formatTimeAgo = (date: Date) => {
     const now = new Date();
     const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
@@ -53,7 +81,26 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+      {/* Custom refresh indicator */}
+      {refreshing && (
+        <View style={styles.refreshIndicator}>
+          <ActivityIndicator size="small" color="#8B5CF6" />
+        </View>
+      )}
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#8B5CF6"
+            colors={["#8B5CF6"]}
+            progressBackgroundColor="#1A1A1A"
+          />
+        }
+      >
         {/* Header */}
         <View style={styles.header}>
           <View>
@@ -82,7 +129,10 @@ export default function DashboardScreen() {
               />
             </TouchableOpacity>
           </View>
-          <TouchableOpacity style={styles.profileButton}>
+          <TouchableOpacity 
+            style={styles.profileButton}
+            onPress={() => router.push('/(tabs)/settings' as any)}
+          >
             <Text style={styles.profileInitial}>A</Text>
           </TouchableOpacity>
         </View>
@@ -112,11 +162,17 @@ export default function DashboardScreen() {
 
         {/* Action Buttons */}
         <View style={styles.actionButtons}>
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity 
+            style={styles.actionButton}
+            onPress={() => router.push('/(tabs)/send' as any)}
+          >
             <IconSymbol name="arrow.up.right" size={24} color="#FFFFFF" />
             <Text style={styles.actionButtonText}>Send</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity 
+            style={styles.actionButton}
+            onPress={() => router.push('/(tabs)/receive' as any)}
+          >
             <IconSymbol name="arrow.down.left" size={24} color="#FFFFFF" />
             <Text style={styles.actionButtonText}>Receive</Text>
           </TouchableOpacity>
@@ -126,12 +182,45 @@ export default function DashboardScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Portfolio</Text>
-            <TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/portfolio')}>
               <Text style={styles.viewAllText}>View All</Text>
             </TouchableOpacity>
           </View>
           
-          {cryptoData.portfolio.map((crypto) => (
+          {(() => {
+            // Show top 2 tokens or default to ETH and USDT
+            let tokensToShow = cryptoData.portfolio;
+            
+            if (tokensToShow.length > 2) {
+              // Show only top 2 by value
+              tokensToShow = cryptoData.portfolio
+                .sort((a, b) => b.value - a.value)
+                .slice(0, 2);
+            } else if (tokensToShow.length === 0) {
+              // Default to ETH and USDT if no tokens
+              tokensToShow = [
+                {
+                  id: 'ethereum',
+                  name: 'Ethereum',
+                  symbol: 'ETH',
+                  amount: 0,
+                  value: 0,
+                  change24h: 0,
+                  color: '#627EEA',
+                },
+                {
+                  id: 'usdt',
+                  name: 'Tether USD',
+                  symbol: 'USDT',
+                  amount: 0,
+                  value: 0,
+                  change24h: 0,
+                  color: '#26a17b',
+                },
+              ];
+            }
+            
+            return tokensToShow.map((crypto) => (
             <View key={crypto.id} style={styles.portfolioItem}>
               <View style={styles.cryptoInfo}>
                 <View style={[styles.cryptoIcon, { backgroundColor: crypto.color }]}>
@@ -156,19 +245,20 @@ export default function DashboardScreen() {
                 </Text>
               </View>
             </View>
-          ))}
+            ));
+          })()}
         </View>
 
         {/* Recent Activity Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recent Activity</Text>
-            <TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('../transactions' as any)}>
               <Text style={styles.viewAllText}>View All</Text>
             </TouchableOpacity>
           </View>
           
-          {cryptoData.transactions.map((transaction) => (
+          {cryptoData.transactions.slice(0, 3).map((transaction) => (
             <View key={transaction.id} style={styles.transactionItem}>
               <View style={styles.transactionIcon}>
                 <IconSymbol 
@@ -180,8 +270,8 @@ export default function DashboardScreen() {
               <View style={styles.transactionInfo}>
                 <Text style={styles.transactionTitle}>
                   {transaction.type === 'receive' 
-                    ? `Received from ${transaction.from}` 
-                    : `Sent to ${transaction.to}`
+                    ? `Received from ${transaction.from?.slice(0, 6)}...${transaction.from?.slice(-4)}` 
+                    : `Sent to ${transaction.to?.slice(0, 6)}...${transaction.to?.slice(-4)}`
                   }
                 </Text>
                 <Text style={styles.transactionTime}>
@@ -193,7 +283,7 @@ export default function DashboardScreen() {
                   styles.transactionAmountText,
                   { color: transaction.type === 'receive' ? '#10B981' : '#EF4444' }
                 ]}>
-                  {transaction.type === 'receive' ? '+' : '-'}{transaction.amount} {transaction.symbol}
+                  {transaction.type === 'receive' ? '+' : '-'}{formatAmount(transaction.amount)} {transaction.symbol}
                 </Text>
                 <Text style={[
                   styles.transactionValue,
@@ -217,6 +307,18 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 20,
+  },
+  refreshIndicator: {
+    position: 'absolute',
+    top: 10,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 1000,
+    paddingTop: 10,
   },
   loadingContainer: {
     flex: 1,

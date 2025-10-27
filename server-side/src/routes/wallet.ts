@@ -3,6 +3,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import {
   buildDelegatedSendUO,
+  buildSendRootUO,
+  buildSendTokenUO,
   getPermissionId,
   getVId,
   sendUserOpV07,
@@ -22,7 +24,9 @@ import {
   getCallPolicyDailyUsageToday,
   getAllCallPolicyPermissionsWithUsage,
   getCurrentDay,
-  buildUpdatePermissionLimitsUO
+  buildUpdatePermissionLimitsUO,
+  fetchAllTokenBalances,
+  fetchTransactionHistory
 } from "../utils/native-code";
 import { parseEther } from 'viem';
 import { InstallationStatus } from "../services/websocket";
@@ -1726,6 +1730,266 @@ router.post("/revoke", async (req: Request, res: Response) => {
       error: "Revocation failed",
       message: err?.message ?? "Failed to revoke delegated key access",
       details: err?.message ?? "internal error"
+    });
+  }
+});
+
+/**
+ * Get token balances for an address
+ * Query params:
+ *   address: Ethereum address to check balances for (required)
+ * Response:
+ * {
+ *   ethBalance: "0.123",
+ *   tokens: [
+ *     {
+ *       symbol: "USDT",
+ *       name: "Tether USD",
+ *       balance: "100.0",
+ *       value: 0,
+ *       decimals: 6,
+ *       address: "0x...",
+ *       color: "#26a17b",
+ *       amount: "100.0"
+ *     }
+ *   ]
+ * }
+ */
+router.get("/balances", async (req: Request, res: Response) => {
+  try {
+    const { address } = req.query;
+    
+    if (!address || typeof address !== "string") {
+      return res.status(400).json({
+        error: "Address is required",
+        message: "Please provide a valid Ethereum address as query parameter"
+      });
+    }
+
+    // Validate address format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      return res.status(400).json({
+        error: "Invalid address format",
+        message: "Please provide a valid Ethereum address (0x...)"
+      });
+    }
+
+    console.log(`[Balance] Fetching balances for address: ${address}`);
+    
+    const balances = await fetchAllTokenBalances(address as `0x${string}`);
+    
+    console.log(`[Balance] Found ${balances.tokens.length} tokens with non-zero balance`);
+    
+    return res.json({
+      success: true,
+      ethBalance: balances.ethBalance,
+      tokens: balances.tokens,
+      message: `Found ${balances.tokens.length} tokens with balance`
+    });
+
+  } catch (err: any) {
+    console.error("[/balances] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch balances",
+      message: err?.message ?? "internal error",
+      details: err?.stack
+    });
+  }
+});
+
+/**
+ * Get transaction history for an address
+ * Query params:
+ *   address: Ethereum address to get transactions for (required)
+ *   limit: Number of transactions to return (optional, default 20)
+ * Response:
+ * {
+ *   success: true,
+ *   transactions: [
+ *     {
+ *       hash: "0x...",
+ *       from: "0x...",
+ *       to: "0x...",
+ *       value: "0.1",
+ *       timestamp: 1234567890,
+ *       type: "sent" | "received",
+ *       status: "success" | "pending" | "failed"
+ *     }
+ *   ]
+ * }
+ */
+router.get("/transactions", async (req: Request, res: Response) => {
+  try {
+    const { address, limit = 20 } = req.query;
+    
+    if (!address || typeof address !== "string") {
+      return res.status(400).json({
+        error: "Address is required",
+        message: "Please provide a valid Ethereum address as query parameter"
+      });
+    }
+
+    // Validate address format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      return res.status(400).json({
+        error: "Invalid address format",
+        message: "Please provide a valid Ethereum address (0x...)"
+      });
+    }
+
+    console.log(`[Transactions] Fetching transaction history for address: ${address}`);
+    
+    const transactions = await fetchTransactionHistory(
+      address as `0x${string}`, 
+      Number(limit)
+    );
+    
+    console.log(`[Transactions] Found ${transactions.length} transactions`);
+    
+    return res.json({
+      success: true,
+      transactions,
+      message: `Found ${transactions.length} transactions`,
+      limit: Number(limit)
+    });
+
+  } catch (err: any) {
+    console.error("[/transactions] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch transactions",
+      message: err?.message ?? "internal error",
+      details: err?.stack,
+      transactions: []
+    });
+  }
+});
+
+/**
+ * Send ETH or ERC20 tokens
+ * Body:
+ * {
+ *   "to": "0x...",           // Recipient address (required)
+ *   "amount": "0.1",         // Amount as string (required)
+ *   "tokenAddress": "0x..."  // Token contract address (optional, omit for ETH)
+ * }
+ * Response:
+ * {
+ *   "success": true,
+ *   "txHash": "0x...",
+ *   "message": "Transaction sent successfully"
+ * }
+ */
+router.post("/send", async (req: Request, res: Response) => {
+  try {
+    const { to, amount, tokenAddress } = req.body;
+
+    // Validation
+    if (!to || typeof to !== "string") {
+      return res.status(400).json({
+        error: "Recipient address is required",
+        message: "Please provide a valid recipient address"
+      });
+    }
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(to)) {
+      return res.status(400).json({
+        error: "Invalid recipient address",
+        message: "Recipient address must be a valid Ethereum address"
+      });
+    }
+
+    if (!amount || typeof amount !== "string") {
+      return res.status(400).json({
+        error: "Amount is required",
+        message: "Please provide a valid amount as string"
+      });
+    }
+
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      return res.status(400).json({
+        error: "Invalid amount",
+        message: "Amount must be a positive number"
+      });
+    }
+
+    console.log(`[Send] Sending ${tokenAddress ? 'token' : 'ETH'} to ${to}:`, amount);
+
+    let txHash: string;
+
+    if (tokenAddress) {
+      // ERC20 token transfer
+      if (!/^0x[a-fA-F0-9]{40}$/.test(tokenAddress)) {
+        return res.status(400).json({
+          error: "Invalid token address",
+          message: "Token address must be a valid Ethereum address"
+        });
+      }
+
+      // Get token decimals
+      const { createPublicClient, http, parseAbi } = await import('viem');
+      const { sepolia } = await import('viem/chains');
+      const ETH_RPC_URL = 'https://sepolia.infura.io/v3/7df085afafad4becaad36c48fb162932';
+      const publicClient = createPublicClient({ chain: sepolia, transport: http(ETH_RPC_URL) });
+
+      const erc20Abi = parseAbi([
+        'function decimals() view returns (uint8)'
+      ]);
+
+      const decimals = await publicClient.readContract({
+        address: tokenAddress as `0x${string}`,
+        abi: erc20Abi,
+        functionName: 'decimals',
+      }) as number;
+
+      // Convert amount to proper units (with decimals)
+      const amountInWei = BigInt(Math.floor(amountNum * 10 ** decimals));
+
+      console.log(`[Send] Building ERC20 transfer: ${amount} * 10^${decimals} = ${amountInWei.toString()}`);
+
+      // Build and send token transfer
+      const { unpacked } = await buildSendTokenUO(
+        tokenAddress as `0x${string}`,
+        to as `0x${string}`,
+        amountInWei,
+        0
+      );
+
+      txHash = await sendUserOpV07(unpacked);
+    } else {
+      // ETH transfer
+      const amountInWei = parseEther(amount);
+      
+      console.log(`[Send] Building ETH transfer: ${amount} ETH = ${amountInWei.toString()} wei`);
+
+      // Build and send ETH transfer
+      const { unpacked } = await buildSendRootUO(
+        to as `0x${string}`,
+        amountInWei,
+        '0x',
+        0
+      );
+
+      txHash = await sendUserOpV07(unpacked);
+    }
+
+    console.log(`[Send] Transaction sent successfully: ${txHash}`);
+
+    return res.json({
+      success: true,
+      txHash,
+      message: tokenAddress ? "Token transfer initiated" : "ETH transfer initiated"
+    });
+
+  } catch (err: any) {
+    console.error("[/send] error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to send transaction",
+      message: err?.message ?? "internal error",
+      details: err?.stack
     });
   }
 });

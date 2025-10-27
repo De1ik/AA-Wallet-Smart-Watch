@@ -1,78 +1,253 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, Modal } from 'react-native';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Modal, ActivityIndicator, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Clipboard from 'expo-clipboard';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useWallet } from '@/contexts/WalletContext';
-import { sendTransaction } from '@/utils/walletService';
-import { parseEther, formatEther } from 'viem';
+import { apiClient } from '@/utils/apiClient';
+
+// Token addresses on Sepolia
+const TOKEN_ADDRESSES: Record<string, { address: string; decimals: number }> = {
+  ETH: { address: '', decimals: 18 },
+  USDT: { address: '0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0', decimals: 6 },
+  USDC: { address: '0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8', decimals: 6 },
+  DAI: { address: '0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357', decimals: 18 },
+  WETH: { address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', decimals: 18 },
+  UNI: { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', decimals: 18 },
+};
+
+// Token colors
+const getTokenColor = (symbol: string) => {
+  const colors: Record<string, string> = {
+    ETH: '#627EEA',
+    USDT: '#26A17B',
+    USDC: '#2775CA',
+    DAI: '#F5AC37',
+    WETH: '#627EEA',
+    UNI: '#FF007A',
+  };
+  return colors[symbol] || '#8B5CF6';
+};
 
 export default function SendScreen() {
-  const { wallet, cryptoData } = useWallet();
+  const { wallet, cryptoData, refreshCryptoData } = useWallet();
   const [recipientAddress, setRecipientAddress] = useState('');
   const [amount, setAmount] = useState('');
-  const [selectedToken, setSelectedToken] = useState<'ETH' | 'USDT'>('ETH');
+  const [selectedToken, setSelectedToken] = useState<{ symbol: string; amount: number } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showTokenSelector, setShowTokenSelector] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [transactionHash, setTransactionHash] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const copyAnimation = useRef(new Animated.Value(0)).current;
+
+  // Get available tokens from portfolio (memoized to prevent new references on every render)
+  const availableTokens = useMemo(() => 
+    cryptoData?.portfolio.filter(token => token.amount > 0) || []
+  , [cryptoData?.portfolio]);
+  
+  // Set default token to first available or ETH
+  React.useEffect(() => {
+    if (!selectedToken && availableTokens.length > 0) {
+      setSelectedToken({ symbol: availableTokens[0].symbol, amount: availableTokens[0].amount });
+    } else if (!selectedToken) {
+      setSelectedToken({ symbol: 'ETH', amount: 0 });
+    }
+  }, [cryptoData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Update selectedToken balance when cryptoData changes
+  useEffect(() => {
+    if (selectedToken && availableTokens.length > 0) {
+      const token = availableTokens.find(t => t.symbol === selectedToken.symbol);
+      if (token && Math.abs(token.amount - selectedToken.amount) > 0.000001) { // Use float comparison for balance updates
+        setSelectedToken({ symbol: selectedToken.symbol, amount: token.amount });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cryptoData]);
+
+  // Auto-update account state when success modal is shown
+  useEffect(() => {
+    if (showSuccessModal) {
+      // Start periodic updates every 3 seconds
+      updateIntervalRef.current = setInterval(() => {
+        refreshCryptoData();
+      }, 3000);
+
+      // Cleanup on unmount or when modal closes
+      return () => {
+        if (updateIntervalRef.current) {
+          clearInterval(updateIntervalRef.current);
+          updateIntervalRef.current = null;
+        }
+      };
+    } else {
+      // Clear interval when modal is closed
+      if (updateIntervalRef.current) {
+        clearInterval(updateIntervalRef.current);
+        updateIntervalRef.current = null;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSuccessModal]);
+
+  const validateInputs = () => {
+    setError(null);
+
+    // Check if all fields are filled
+    if (!recipientAddress || !amount || !selectedToken) {
+      setError('Please fill in all fields');
+      return false;
+    }
+
+    // Validate address format
+    const trimmedAddress = recipientAddress.trim();
+    if (!trimmedAddress.startsWith('0x') || trimmedAddress.length !== 42) {
+      setError('Invalid recipient address format');
+      return false;
+    }
+
+    // Validate address characters (should be hexadecimal)
+    if (!/^0x[a-fA-F0-9]{40}$/.test(trimmedAddress)) {
+      setError('Invalid recipient address (contains invalid characters)');
+      return false;
+    }
+
+    // Validate amount
+    const normalizedAmount = amount.replace(',', '.');
+    const amountNum = parseFloat(normalizedAmount);
+    
+    if (isNaN(amountNum)) {
+      setError('Amount must be a valid number');
+      return false;
+    }
+
+    if (amountNum <= 0) {
+      setError('Amount must be greater than zero');
+      return false;
+    }
+
+    // Check if amount exceeds balance
+    if (amountNum > selectedToken.amount) {
+      setError(`Insufficient balance. You have ${selectedToken.amount.toFixed(6)} ${selectedToken.symbol}`);
+      return false;
+    }
+
+    return true;
+  };
 
   const handleSend = async () => {
-    if (!recipientAddress || !amount) {
-      Alert.alert('Error', 'Please fill in all fields');
+    // Validate inputs
+    if (!validateInputs()) {
       return;
     }
 
     if (!wallet) {
-      Alert.alert('Error', 'No wallet found');
-      return;
-    }
-
-    // Basic address validation
-    if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
-      Alert.alert('Error', 'Invalid recipient address');
-      return;
-    }
-
-    // Basic amount validation - handle both comma and dot decimal separators
-    const normalizedAmount = amount.replace(',', '.'); // Convert comma to dot for parsing
-    const amountNum = parseFloat(normalizedAmount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      Alert.alert('Error', 'Invalid amount');
+      setError('No wallet found. Please create or import a wallet');
       return;
     }
 
     setIsLoading(true);
+    setError(null);
+
+    const startTime = Date.now();
+    const minWaitTime = 3000; // 3 seconds minimum
 
     try {
-      let tokenAddress: `0x${string}` | undefined;
+      // Get token address - empty for ETH
+      const normalizedAmount = amount.replace(',', '.');
+      const tokenInfo = TOKEN_ADDRESSES[selectedToken!.symbol];
+      const tokenAddress = tokenInfo?.address || undefined;
 
-      if (selectedToken === 'USDT') {
-        // USDT contract address on Sepolia (example)
-        tokenAddress = '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06' as `0x${string}`;
-      }
-
-      const txHash = await sendTransaction({
-        to: recipientAddress as `0x${string}`,
-        amount: normalizedAmount, // Amount as string in ETH (normalized to use dot)
+      // Call server-side API to send transaction
+      const response = await apiClient.sendTransaction({
+        to: recipientAddress.trim(),
+        amount: normalizedAmount,
         tokenAddress,
       });
 
-      Alert.alert(
-        'Success!', 
-        `Transaction sent successfully!\n\nTransaction Hash: ${txHash.slice(0, 10)}...`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              setRecipientAddress('');
-              setAmount('');
-            }
-          }
-        ]
-      );
+      // Calculate remaining time to reach minimum wait
+      const elapsedTime = Date.now() - startTime;
+      const remainingTime = Math.max(0, minWaitTime - elapsedTime);
+
+      // Wait for minimum time before showing result
+      await new Promise(resolve => setTimeout(resolve, remainingTime));
+
+      if (response.success && response.txHash) {
+        // Success - refresh data and show modal
+        setTransactionHash(response.txHash);
+        
+        // Refresh balances and transactions after successful send
+        try {
+          await refreshCryptoData();
+        } catch (refreshError) {
+          console.error('Error refreshing data after send:', refreshError);
+          // Don't fail the transaction if refresh fails
+        }
+        
+        // Show success modal after data refresh
+        setShowSuccessModal(true);
+      } else {
+        setError(response.error || 'Transaction failed');
+      }
     } catch (error) {
+      // Calculate remaining time to reach minimum wait even on error
+      const elapsedTime = Date.now() - startTime;
+      const remainingTime = Math.max(0, minWaitTime - elapsedTime);
+      
+      if (remainingTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, remainingTime));
+      }
+      
       console.error('Send transaction error:', error);
-      Alert.alert('Error', `Failed to send transaction: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setError(`Transaction failed: ${errorMessage}`);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleSuccessClose = async () => {
+    setShowSuccessModal(false);
+    setRecipientAddress('');
+    setAmount('');
+    setTransactionHash('');
+    setError(null);
+    setCopiedField(null);
+    
+    // Refresh data again when modal closes (in case transaction was confirmed while modal was open)
+    try {
+      await refreshCryptoData();
+    } catch (refreshError) {
+      console.error('Error refreshing data on close:', refreshError);
+    }
+  };
+
+  const copyToClipboard = async (text: string, field: string) => {
+    try {
+      await Clipboard.setStringAsync(text);
+      setCopiedField(field);
+      
+      // Trigger animation
+      Animated.sequence([
+        Animated.timing(copyAnimation, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.delay(1200),
+        Animated.timing(copyAnimation, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setCopiedField(null);
+      });
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
     }
   };
 
@@ -101,15 +276,18 @@ export default function SendScreen() {
               style={styles.tokenSelector}
               onPress={() => setShowTokenSelector(true)}
             >
-              <View style={styles.tokenInfo}>
-                <View style={[styles.tokenIcon, { backgroundColor: selectedToken === 'ETH' ? '#627EEA' : '#26A17B' }]}>
-                  <Text style={styles.tokenIconText}>{selectedToken[0]}</Text>
+              {selectedToken && (
+                <View style={styles.tokenInfo}>
+                  <View style={[styles.tokenIcon, { backgroundColor: getTokenColor(selectedToken.symbol) }]}>
+                    <Text style={styles.tokenIconText}>{selectedToken.symbol[0]}</Text>
+                  </View>
+                  <Text style={styles.tokenName}>{selectedToken.symbol}</Text>
                 </View>
-                <Text style={styles.tokenName}>{selectedToken}</Text>
-              </View>
+              )}
               <IconSymbol name="chevron.down" size={20} color="#A0A0A0" />
             </TouchableOpacity>
           </View>
+
 
           {/* Recipient Address */}
           <View style={styles.section}>
@@ -119,7 +297,10 @@ export default function SendScreen() {
               placeholder="0x..."
               placeholderTextColor="#666666"
               value={recipientAddress}
-              onChangeText={setRecipientAddress}
+              onChangeText={(text) => {
+                setRecipientAddress(text);
+                setError(null); // Clear error on input
+              }}
               autoCapitalize="none"
               autoCorrect={false}
             />
@@ -134,26 +315,40 @@ export default function SendScreen() {
                 placeholder="0.00"
                 placeholderTextColor="#666666"
                 value={amount}
-                onChangeText={setAmount}
+                onChangeText={(text) => {
+                  setAmount(text);
+                  setError(null); // Clear error on input
+                }}
                 keyboardType="decimal-pad"
               />
-              <Text style={styles.tokenSymbol}>{selectedToken}</Text>
+              {selectedToken && <Text style={styles.tokenSymbol}>{selectedToken.symbol}</Text>}
             </View>
-            {cryptoData && (
+            {selectedToken && (
               <Text style={styles.balanceText}>
-                Balance: {selectedToken === 'ETH' ? '0.5' : '1000.0'} {selectedToken}
+                Balance: {selectedToken.amount.toFixed(6)} {selectedToken.symbol}
               </Text>
             )}
           </View>
 
+          {/* Error Message */}
+          {error && (
+            <View style={styles.errorContainer}>
+              <IconSymbol name="exclamationmark.circle.fill" size={20} color="#EF4444" />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+
           {/* Send Button */}
           <TouchableOpacity 
-            style={[styles.sendButton, isLoading && styles.sendButtonDisabled]}
+            style={[styles.sendButton, isLoading && styles.sendButtonLoading]}
             onPress={handleSend}
             disabled={isLoading}
           >
             {isLoading ? (
-              <Text style={styles.sendButtonText}>Sending...</Text>
+              <View style={styles.loadingContent}>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <Text style={styles.sendButtonText}>Confirming...</Text>
+              </View>
             ) : (
               <>
                 <IconSymbol name="paperplane.fill" size={20} color="#FFFFFF" />
@@ -180,42 +375,95 @@ export default function SendScreen() {
               </TouchableOpacity>
             </View>
             
-            <TouchableOpacity 
-              style={styles.tokenOption}
-              onPress={() => {
-                setSelectedToken('ETH');
-                setShowTokenSelector(false);
-              }}
-            >
-              <View style={styles.tokenInfo}>
-                <View style={[styles.tokenIcon, { backgroundColor: '#627EEA' }]}>
-                  <Text style={styles.tokenIconText}>E</Text>
+            {availableTokens.map((token) => (
+              <TouchableOpacity 
+                key={token.symbol}
+                style={styles.tokenOption}
+                onPress={() => {
+                  setSelectedToken({ symbol: token.symbol, amount: token.amount });
+                  setShowTokenSelector(false);
+                }}
+              >
+                <View style={styles.tokenInfo}>
+                  <View style={[styles.tokenIcon, { backgroundColor: getTokenColor(token.symbol) }]}>
+                    <Text style={styles.tokenIconText}>{token.symbol[0]}</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.tokenName}>{token.name}</Text>
+                    <Text style={styles.tokenSymbolSmall}>{token.symbol}</Text>
+                  </View>
                 </View>
-                <View>
-                  <Text style={styles.tokenName}>Ethereum</Text>
-                  <Text style={styles.tokenSymbol}>ETH</Text>
+                <Text style={styles.tokenBalance}>{token.amount.toFixed(6)} {token.symbol}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Success Modal */}
+      <Modal
+        visible={showSuccessModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={handleSuccessClose}
+      >
+        <View style={styles.successModalOverlay}>
+          <View style={styles.successModalContent}>
+            <Text style={styles.successTitle}>Transaction Confirmed!</Text>
+            <Text style={styles.successSubtitle}>Your transaction has been successfully sent</Text>
+
+            <View style={styles.successDetails}>
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Token</Text>
+                <Text style={styles.successDetailValue}>
+                  {selectedToken?.symbol} • {parseFloat(amount).toFixed(6)}
+                </Text>
+              </View>
+
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Recipient</Text>
+                <View style={styles.addressRow}>
+                  <Text style={styles.successDetailAddress}>
+                    {recipientAddress.slice(0, 10)}...{recipientAddress.slice(-8)}
+                  </Text>
+                  <TouchableOpacity 
+                    onPress={() => copyToClipboard(recipientAddress, 'recipient')}
+                    style={styles.successCopyButton}
+                  >
+                    {copiedField === 'recipient' ? (
+                      <IconSymbol name="checkmark.circle.fill" size={20} color="#10B981" />
+                    ) : (
+                      <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
+                    )}
+                  </TouchableOpacity>
                 </View>
               </View>
-              <Text style={styles.tokenBalance}>0.5 ETH</Text>
-            </TouchableOpacity>
+
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Transaction Hash</Text>
+                <View style={styles.addressRow}>
+                  <Text style={styles.successDetailAddress}>
+                    {transactionHash.slice(0, 10)}...{transactionHash.slice(-8)}
+                  </Text>
+                  <TouchableOpacity 
+                    onPress={() => copyToClipboard(transactionHash, 'hash')}
+                    style={styles.successCopyButton}
+                  >
+                    {copiedField === 'hash' ? (
+                      <IconSymbol name="checkmark.circle.fill" size={20} color="#10B981" />
+                    ) : (
+                      <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
 
             <TouchableOpacity 
-              style={styles.tokenOption}
-              onPress={() => {
-                setSelectedToken('USDT');
-                setShowTokenSelector(false);
-              }}
+              style={styles.successButton}
+              onPress={handleSuccessClose}
             >
-              <View style={styles.tokenInfo}>
-                <View style={[styles.tokenIcon, { backgroundColor: '#26A17B' }]}>
-                  <Text style={styles.tokenIconText}>U</Text>
-                </View>
-                <View>
-                  <Text style={styles.tokenName}>Tether USD</Text>
-                  <Text style={styles.tokenSymbol}>USDT</Text>
-                </View>
-              </View>
-              <Text style={styles.tokenBalance}>1000.0 USDT</Text>
+              <Text style={styles.successButtonText}>Done</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -289,6 +537,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
+  tokenSymbolSmall: {
+    fontSize: 14,
+    color: '#A0A0A0',
+  },
   input: {
     backgroundColor: '#1A1A1A',
     borderRadius: 12,
@@ -337,6 +589,15 @@ const styles = StyleSheet.create({
   sendButtonDisabled: {
     backgroundColor: '#4A4A4A',
   },
+  sendButtonLoading: {
+    backgroundColor: '#6D4BC7',
+    opacity: 0.9,
+  },
+  loadingContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   sendButtonText: {
     color: '#FFFFFF',
     fontSize: 18,
@@ -378,6 +639,95 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#A0A0A0',
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 12,
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#DC2626',
+    flex: 1,
+    fontWeight: '500',
+  },
+  successModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  successModalContent: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 24,
+    padding: 32,
+    width: '100%',
+    maxWidth: 400,
+    alignItems: 'center',
+  },
+  successTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 8,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  successSubtitle: {
+    fontSize: 16,
+    color: '#A0A0A0',
+    marginBottom: 32,
+    textAlign: 'center',
+  },
+  successDetails: {
+    width: '100%',
+    marginBottom: 24,
+  },
+  successDetailRow: {
+    marginBottom: 20,
+  },
+  successDetailLabel: {
+    fontSize: 14,
+    color: '#A0A0A0',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  successDetailValue: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  successDetailAddress: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontFamily: 'monospace',
+    flex: 1,
+  },
+  successCopyButton: {
+    padding: 4,
+  },
+  successButton: {
+    backgroundColor: '#8B5CF6',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    width: '100%',
+    alignItems: 'center',
+  },
+  successButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

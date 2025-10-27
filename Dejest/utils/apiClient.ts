@@ -84,6 +84,51 @@ export interface RevokeKeyResponse {
   message: string;
 }
 
+export interface TokenBalance {
+  symbol: string;
+  name: string;
+  balance: string;
+  value: number;
+  decimals: number;
+  address: string;
+  color: string;
+  amount: string;
+}
+
+export interface BalancesResponse {
+  success: boolean;
+  ethBalance: string;
+  tokens: TokenBalance[];
+  message: string;
+}
+
+export interface Transaction {
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  timestamp: number;
+  type: 'sent' | 'received';
+  status: 'success' | 'pending' | 'failed';
+  tokenSymbol?: string;
+  tokenAddress?: string;
+  eventType?: string;
+}
+
+export interface TransactionsResponse {
+  success: boolean;
+  transactions: Transaction[];
+  message: string;
+  limit: number;
+}
+
+export interface SendTransactionResponse {
+  success: boolean;
+  txHash: string;
+  message: string;
+  error?: string;
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -343,6 +388,28 @@ class ApiClient {
     return this.makeRequest<EntryPointDepositResponse>('/wallet/entrypoint/deposit', {
       method: 'POST',
       body: JSON.stringify({ amountEth }),
+    });
+  }
+
+  // Get token balances for an address
+  async getBalances(address: string): Promise<BalancesResponse> {
+    return this.makeRequest<BalancesResponse>(`/wallet/balances?address=${address}`);
+  }
+
+  // Get transaction history for an address
+  async getTransactions(address: string, limit: number = 20): Promise<TransactionsResponse> {
+    return this.makeRequest<TransactionsResponse>(`/wallet/transactions?address=${address}&limit=${limit}`);
+  }
+
+  // Send ETH or ERC20 tokens
+  async sendTransaction(params: {
+    to: string;
+    amount: string;
+    tokenAddress?: string;
+  }): Promise<SendTransactionResponse> {
+    return this.makeRequest<SendTransactionResponse>('/wallet/send', {
+      method: 'POST',
+      body: JSON.stringify(params),
     });
   }
 }

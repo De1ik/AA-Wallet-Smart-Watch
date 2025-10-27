@@ -8,6 +8,7 @@ import * as Clipboard from 'expo-clipboard';
 export default function ReceiveScreen() {
   const { wallet } = useWallet();
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const [addressType, setAddressType] = useState<'eoa' | 'smart'>('smart');
 
   const copyToClipboard = async (address: string, type: string) => {
     try {
@@ -31,53 +32,86 @@ export default function ReceiveScreen() {
     );
   }
 
+  const displayAddress = addressType === 'smart' && wallet.smartWalletAddress 
+    ? wallet.smartWalletAddress 
+    : wallet.address;
+
+  const hasSmartWallet = !!wallet.smartWalletAddress;
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.content}>
-          <Text style={styles.title}>Receive Crypto</Text>
-          <Text style={styles.subtitle}>Share your wallet address to receive payments</Text>
+          {/* Header */}
+          <View style={styles.header}>
+            <View>
+              <Text style={styles.title}>Receive Funds</Text>
+              <Text style={styles.subtitle}>Share your address to receive payments</Text>
+            </View>
+          </View>
 
-          {/* Smart Wallet Address */}
-          {wallet.smartWalletAddress && (
-            <View style={styles.addressCard}>
-              <View style={styles.addressHeader}>
-                <IconSymbol name="wallet.fill" size={24} color="#8B5CF6" />
-                <Text style={styles.addressType}>Smart Wallet Address</Text>
-                <TouchableOpacity
-                  style={styles.copyButton}
-                  onPress={() => copyToClipboard(wallet.smartWalletAddress!, 'Smart wallet')}
-                >
-                  <IconSymbol 
-                    name={copiedAddress === wallet.smartWalletAddress ? "checkmark" : "doc.on.doc"} 
-                    size={20} 
-                    color={copiedAddress === wallet.smartWalletAddress ? "#10B981" : "#8B5CF6"} 
-                  />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.addressText}>{wallet.smartWalletAddress}</Text>
-              <Text style={styles.addressNote}>Recommended for smart wallet transactions</Text>
+          {/* Address Type Toggle */}
+          {hasSmartWallet && (
+            <View style={styles.toggleContainer}>
+              <TouchableOpacity 
+                style={[styles.toggleButton, addressType === 'smart' && styles.toggleButtonActive]}
+                onPress={() => setAddressType('smart')}
+              >
+                <Text style={[styles.toggleText, addressType === 'smart' && styles.toggleTextActive]}>
+                  Smart Wallet
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.toggleButton, addressType === 'eoa' && styles.toggleButtonActive]}
+                onPress={() => setAddressType('eoa')}
+              >
+                <Text style={[styles.toggleText, addressType === 'eoa' && styles.toggleTextActive]}>
+                  EOA Wallet
+                </Text>
+              </TouchableOpacity>
             </View>
           )}
 
-          {/* EOA Address */}
+          {/* Selected Address Card */}
           <View style={styles.addressCard}>
             <View style={styles.addressHeader}>
-              <IconSymbol name="person.fill" size={24} color="#8B5CF6" />
-              <Text style={styles.addressType}>EOA Address</Text>
+              <View style={styles.addressTypeBadge}>
+                <IconSymbol 
+                  name={addressType === 'smart' ? "wallet.pass.fill" : "person.fill"} 
+                  size={20} 
+                  color="#8B5CF6" 
+                />
+                <Text style={styles.addressTypeLabel}>
+                  {addressType === 'smart' ? 'Smart Wallet' : 'EOA'} Address
+                </Text>
+              </View>
               <TouchableOpacity
                 style={styles.copyButton}
-                onPress={() => copyToClipboard(wallet.address, 'EOA')}
+                onPress={() => {
+                  const type = addressType === 'smart' ? 'Smart wallet' : 'EOA';
+                  copyToClipboard(displayAddress, type);
+                }}
               >
                 <IconSymbol 
-                  name={copiedAddress === wallet.address ? "checkmark" : "doc.on.doc"} 
-                  size={20} 
-                  color={copiedAddress === wallet.address ? "#10B981" : "#8B5CF6"} 
+                  name={copiedAddress === displayAddress ? "checkmark.circle.fill" : "doc.on.doc"} 
+                  size={24} 
+                  color={copiedAddress === displayAddress ? "#10B981" : "#8B5CF6"} 
                 />
               </TouchableOpacity>
             </View>
-            <Text style={styles.addressText}>{wallet.address}</Text>
-            <Text style={styles.addressNote}>Standard Ethereum address</Text>
+            
+            <View style={styles.addressDisplayContainer}>
+              <Text style={styles.addressText}>{displayAddress}</Text>
+            </View>
+            
+            <View style={styles.addressInfoContainer}>
+              <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
+              <Text style={styles.addressNote}>
+                {addressType === 'smart' 
+                  ? 'Smart wallet supports advanced features and session keys' 
+                  : 'Standard Ethereum address - simple and widely compatible'}
+              </Text>
+            </View>
           </View>
 
           {/* QR Code Placeholder */}
@@ -87,24 +121,73 @@ export default function ReceiveScreen() {
             </View>
             <Text style={styles.qrText}>QR Code</Text>
             <Text style={styles.qrNote}>
-              {wallet.smartWalletAddress ? 'Smart Wallet' : 'EOA'} Address
+              {addressType === 'smart' ? 'Smart Wallet' : 'EOA'} Address
             </Text>
           </View>
 
           {/* Instructions */}
           <View style={styles.instructionsCard}>
-            <Text style={styles.instructionsTitle}>How to receive crypto:</Text>
-            <View style={styles.instructionItem}>
-              <IconSymbol name="1.circle.fill" size={20} color="#8B5CF6" />
-              <Text style={styles.instructionText}>Share your wallet address with the sender</Text>
+            <View style={styles.instructionsHeader}>
+              <IconSymbol name="questionmark.circle.fill" size={24} color="#8B5CF6" />
+              <Text style={styles.instructionsTitle}>How to receive crypto</Text>
             </View>
-            <View style={styles.instructionItem}>
-              <IconSymbol name="2.circle.fill" size={20} color="#8B5CF6" />
-              <Text style={styles.instructionText}>Use the QR code for easy scanning</Text>
+            
+            <View style={styles.instructionList}>
+              <View style={styles.instructionItem}>
+                <View style={styles.instructionNumber}>
+                  <Text style={styles.instructionNumberText}>1</Text>
+                </View>
+                <View style={styles.instructionContent}>
+                  <Text style={styles.instructionTitle}>Share your address</Text>
+                  <Text style={styles.instructionText}>
+                    Copy and share your wallet address with the sender
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.instructionItem}>
+                <View style={styles.instructionNumber}>
+                  <Text style={styles.instructionNumberText}>2</Text>
+                </View>
+                <View style={styles.instructionContent}>
+                  <Text style={styles.instructionTitle}>Scan QR code</Text>
+                  <Text style={styles.instructionText}>
+                    Let the sender scan the QR code for instant transactions
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.instructionItem}>
+                <View style={styles.instructionNumber}>
+                  <Text style={styles.instructionNumberText}>3</Text>
+                </View>
+                <View style={styles.instructionContent}>
+                  <Text style={styles.instructionTitle}>Wait for confirmation</Text>
+                  <Text style={styles.instructionText}>
+                    Transactions will appear in your wallet once confirmed
+                  </Text>
+                </View>
+              </View>
             </View>
-            <View style={styles.instructionItem}>
-              <IconSymbol name="3.circle.fill" size={20} color="#8B5CF6" />
-              <Text style={styles.instructionText}>Wait for the transaction to be confirmed</Text>
+          </View>
+
+          {/* Security Tips */}
+          <View style={styles.securityCard}>
+            <View style={styles.securityHeader}>
+              <IconSymbol name="shield.fill" size={20} color="#10B981" />
+              <Text style={styles.securityTitle}>Security Tips</Text>
+            </View>
+            <View style={styles.securityItem}>
+              <IconSymbol name="checkmark.circle.fill" size={16} color="#10B981" />
+              <Text style={styles.securityText}>Always verify the address before sharing</Text>
+            </View>
+            <View style={styles.securityItem}>
+              <IconSymbol name="checkmark.circle.fill" size={16} color="#10B981" />
+              <Text style={styles.securityText}>Only share your address with trusted parties</Text>
+            </View>
+            <View style={styles.securityItem}>
+              <IconSymbol name="checkmark.circle.fill" size={16} color="#10B981" />
+              <Text style={styles.securityText}>Never share your private key or seed phrase</Text>
             </View>
           </View>
         </View>
@@ -126,6 +209,9 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 40,
   },
+  header: {
+    marginBottom: 24,
+  },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
@@ -135,59 +221,97 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#A0A0A0',
-    marginBottom: 32,
+  },
+  toggleContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+    backgroundColor: '#1A1A1A',
+    padding: 4,
+    borderRadius: 12,
+  },
+  toggleButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  toggleButtonActive: {
+    backgroundColor: '#8B5CF6',
+  },
+  toggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#A0A0A0',
+  },
+  toggleTextActive: {
+    color: '#FFFFFF',
   },
   addressCard: {
     backgroundColor: '#1A1A1A',
     borderRadius: 16,
     padding: 20,
-    marginBottom: 16,
+    marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: '#2A2A2A',
   },
   addressHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
-    gap: 12,
+    justifyContent: 'space-between',
+    marginBottom: 16,
   },
-  addressType: {
-    flex: 1,
+  addressTypeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addressTypeLabel: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
   },
   copyButton: {
     padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#2A2A2A',
+  },
+  addressDisplayContainer: {
+    backgroundColor: '#0F0F0F',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
   },
   addressText: {
     fontSize: 14,
     color: '#FFFFFF',
     fontFamily: 'monospace',
-    marginBottom: 8,
     lineHeight: 20,
   },
+  addressInfoContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
   addressNote: {
-    fontSize: 12,
+    flex: 1,
+    fontSize: 13,
     color: '#8B5CF6',
-    fontWeight: '500',
+    lineHeight: 18,
   },
   qrCard: {
     backgroundColor: '#1A1A1A',
     borderRadius: 16,
     padding: 32,
-    marginBottom: 24,
+    marginBottom: 20,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: '#2A2A2A',
   },
   qrCode: {
-    width: 160,
-    height: 160,
+    width: 200,
+    height: 200,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
@@ -200,32 +324,93 @@ const styles = StyleSheet.create({
   },
   qrNote: {
     fontSize: 14,
-    color: '#A0A0A0',
+    color: '#8B5CF6',
+    fontWeight: '500',
   },
   instructionsCard: {
     backgroundColor: '#1A1A1A',
     borderRadius: 16,
     padding: 20,
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: '#2A2A2A',
+  },
+  instructionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 20,
   },
   instructionsTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 16,
+  },
+  instructionList: {
+    gap: 16,
   },
   instructionItem: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  instructionNumber: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#8B5CF6',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
-    gap: 12,
+    flexShrink: 0,
+  },
+  instructionNumberText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  instructionContent: {
+    flex: 1,
+  },
+  instructionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 4,
   },
   instructionText: {
-    flex: 1,
-    fontSize: 14,
+    fontSize: 13,
     color: '#A0A0A0',
-    lineHeight: 20,
+    lineHeight: 18,
+  },
+  securityCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+  },
+  securityHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  securityTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  securityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  securityText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#A0A0A0',
+    lineHeight: 18,
   },
 });
 

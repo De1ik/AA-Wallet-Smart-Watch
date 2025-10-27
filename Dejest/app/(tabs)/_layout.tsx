@@ -50,7 +50,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <IconSymbol 
               size={24} 
-              name="wallet.fill" 
+              name="wallet.pass.fill" 
               color={focused ? '#8B5CF6' : color} 
             />
           ),

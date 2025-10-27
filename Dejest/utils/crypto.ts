@@ -83,26 +83,26 @@ export function getPrivateKeyFromAccount(account: any): string {
  * Mock crypto data for demo
  */
 export const mockCryptoData = {
-  totalBalance: 12458.92,
-  change24h: 2.4,
+  totalBalance: 12525.0, // 7525 (ETH) + 5000 (USDC)
+  change24h: 0,
   portfolio: [
-    {
-      id: 'bitcoin',
-      name: 'Bitcoin',
-      symbol: 'BTC',
-      amount: 0.284,
-      value: 8420.5,
-      change24h: 1.2,
-      color: '#F7931A',
-    },
     {
       id: 'ethereum',
       name: 'Ethereum',
       symbol: 'ETH',
       amount: 2.15,
-      value: 3538.42,
+      value: 7525.0, // 2.15 * 3500
       change24h: -0.8,
       color: '#627EEA',
+    },
+    {
+      id: 'usdc',
+      name: 'USD Coin',
+      symbol: 'USDC',
+      amount: 5000,
+      value: 5000.0, // Stablecoin 1:1 with USD
+      change24h: 0,
+      color: '#2775CA',
     },
   ],
   transactions: [
@@ -110,9 +110,9 @@ export const mockCryptoData = {
       id: '1',
       type: 'receive' as const,
       from: 'John Doe',
-      amount: 0.0234,
-      symbol: 'BTC',
-      value: 892.5,
+      amount: 0.5,
+      symbol: 'ETH',
+      value: 1750.0, // 0.5 * 3500
       timestamp: new Date(Date.now() - 2 * 60 * 1000), // 2 minutes ago
     },
     {
@@ -120,8 +120,8 @@ export const mockCryptoData = {
       type: 'send' as const,
       to: 'Sarah Wilson',
       amount: 150,
-      symbol: 'USDT',
-      value: 150.0,
+      symbol: 'USDC',
+      value: 150.0, // Stablecoin 1:1 with USD
       timestamp: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago
     },
     {
@@ -130,7 +130,7 @@ export const mockCryptoData = {
       from: 'Mike Chen',
       amount: 2.5,
       symbol: 'ETH',
-      value: 4125.0,
+      value: 8750.0, // 2.5 * 3500
       timestamp: new Date(Date.now() - 3 * 60 * 60 * 1000), // 3 hours ago
     },
   ],
