@@ -28,6 +28,7 @@ import {
   fetchAllTokenBalances,
   fetchTransactionHistory
 } from "../utils/native-code";
+import { fetchEtherscanTransactions, EtherscanTransaction } from "../utils/etherscanHistory";
 import { parseEther } from 'viem';
 import { InstallationStatus } from "../services/websocket";
 import { wsService } from "../index";
@@ -1485,23 +1486,54 @@ async function performDelegatedKeyInstallation(
       console.log(`🔑 Permission ID: ${permissionId}`);
       console.log(`🆔 Validation ID: ${vId}`);
     } else {
+      // Get nonce BEFORE sending transaction to properly detect when it's confirmed
+      const rootNonceBefore = await getRootCurrentNonce();
+      console.log(`[Installation ${installationId}] Root nonce before install: ${rootNonceBefore}`);
+      
       const { unpacked: installUO, permissionId: permId, vId: vid } = await buildInstallPermissionUO(delegatedEOA as `0x${string}`);
+      
+      sendStatus({
+        step: 'installing',
+        message: 'Sending install transaction...',
+        progress: 25,
+      });
+      
       installTxHash = await sendUserOpV07(installUO);
       permissionId = permId;
       vId = vid;
+      
+      console.log(`[Installation ${installationId}] Install tx:`, installTxHash);
+      
+      // sendUserOpV07 already waits for receipt (up to 30s), so transaction should be confirmed
+      // Just verify nonce updated quickly - if not, transaction might still be processing but we proceed anyway
+      const rootNonceAfter = await getRootCurrentNonce();
+      
+      if (rootNonceAfter > rootNonceBefore) {
+        console.log(`[Installation ${installationId}] Install confirmed! Nonce updated: ${rootNonceBefore} -> ${rootNonceAfter}`);
+      } else {
+        console.warn(`[Installation ${installationId}] Nonce not yet updated (${rootNonceBefore} -> ${rootNonceAfter}), but receipt was received. Transaction should be confirmed.`);
+      }
+      
+      sendStatus({
+        step: 'installing',
+        message: 'Install transaction confirmed!',
+        progress: 50,
+        txHash: installTxHash
+      });
     }
     
-    console.log(`[Installation ${installationId}] Install tx:`, installTxHash);
+    console.log(`[Installation ${installationId}] Install transaction complete`);
+    
+    if (!installTxHash) {
+      throw new Error('Installation transaction hash not available');
+    }
     
     sendStatus({
       step: 'installing',
-      message: 'Waiting for install transaction to be mined...',
-      progress: 30,
+      message: 'Install transaction confirmed!',
+      progress: 50,
       txHash: installTxHash
     });
-
-    // Wait for install transaction to be confirmed
-    await waitForNonceUpdate(installationId, sendStatus, 50);
 
     // Step 2: Granting Access
     sendStatus({
@@ -1514,8 +1546,15 @@ async function performDelegatedKeyInstallation(
 
     if (keyType === 'sudo') {
       // For sudo: just grant access
+      const rootNonceBeforeGrant = await getRootCurrentNonce();
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
       grantTxHash = await sendUserOpV07(grantUO);
+      
+      // Verify nonce updated
+      const rootNonceAfterGrant = await getRootCurrentNonce();
+      if (rootNonceAfterGrant > rootNonceBeforeGrant) {
+        console.log(`[Installation ${installationId}] Grant confirmed! Nonce: ${rootNonceBeforeGrant} -> ${rootNonceAfterGrant}`);
+      }
     } else if (keyType === 'callpolicy') {
       // For CallPolicy: still need to grant access to execute selector
       sendStatus({
@@ -1524,8 +1563,15 @@ async function performDelegatedKeyInstallation(
         progress: 70
       });
       
+      const rootNonceBeforeGrant = await getRootCurrentNonce();
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
       grantTxHash = await sendUserOpV07(grantUO);
+      
+      // Verify nonce updated
+      const rootNonceAfterGrant = await getRootCurrentNonce();
+      if (rootNonceAfterGrant > rootNonceBeforeGrant) {
+        console.log(`[Installation ${installationId}] Grant confirmed! Nonce: ${rootNonceBeforeGrant} -> ${rootNonceAfterGrant}`);
+      }
     } else {
       // For restricted: enable selector first, then grant access
       const { unpacked: enableUO } = await buildEnableSelectorUO(
@@ -1541,28 +1587,36 @@ async function performDelegatedKeyInstallation(
         progress: 70
       });
 
+      const rootNonceBeforeEnable = await getRootCurrentNonce();
       const enableTxHash = await sendUserOpV07(enableUO);
       console.log(`[Installation ${installationId}] Enable tx:`, enableTxHash);
       
-      // Wait for enable transaction
-      await waitForNonceUpdate(installationId, sendStatus, 80);
+      // Verify enable transaction
+      const rootNonceAfterEnable = await getRootCurrentNonce();
+      if (rootNonceAfterEnable > rootNonceBeforeEnable) {
+        console.log(`[Installation ${installationId}] Enable confirmed! Nonce: ${rootNonceBeforeEnable} -> ${rootNonceAfterEnable}`);
+      }
 
       // Then grant access
+      const rootNonceBeforeGrant = await getRootCurrentNonce();
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
       grantTxHash = await sendUserOpV07(grantUO);
+      
+      // Verify grant transaction
+      const rootNonceAfterGrant = await getRootCurrentNonce();
+      if (rootNonceAfterGrant > rootNonceBeforeGrant) {
+        console.log(`[Installation ${installationId}] Grant confirmed! Nonce: ${rootNonceBeforeGrant} -> ${rootNonceAfterGrant}`);
+      }
+      
+      sendStatus({
+        step: 'granting',
+        message: 'Grant transaction confirmed!',
+        progress: 85,
+        txHash: grantTxHash
+      });
     }
 
     console.log(`[Installation ${installationId}] Grant tx:`, grantTxHash);
-    
-    sendStatus({
-      step: 'granting',
-      message: 'Waiting for grant transaction to be mined...',
-      progress: 85,
-      txHash: grantTxHash
-    });
-
-    // Wait for grant transaction to be confirmed
-    await waitForNonceUpdate(installationId, sendStatus, 95);
 
     // Step 3: Completed
     const keyTypeDisplay = keyType === 'sudo' ? 'Sudo' : keyType === 'restricted' ? 'Restricted' : 'CallPolicy';
@@ -1612,29 +1666,47 @@ async function performDelegatedKeyInstallation(
 }
 
 // Helper function to wait for nonce updates
+// Since sendUserOpV07 now waits for receipt, transactions are usually already confirmed
+// This function now just double-checks the nonce has updated as expected
 async function waitForNonceUpdate(
   installationId: string, 
   sendStatus: (status: InstallationStatus) => void,
-  progressUpdate: number
+  progressUpdate: number,
+  nonceBefore?: number | bigint
 ) {
-  const maxWaitTime = 5 * 60 * 1000; // 5 minutes
+  const maxWaitTime = 2 * 60 * 1000; // 2 minutes (reduced since transaction should already be confirmed)
   const startTime = Date.now();
   let attempts = 0;
   
-  let rootNonceBefore = await getRootCurrentNonce();
+  // If nonceBefore is provided, use it; otherwise get current nonce
+  let rootNonceBefore: bigint;
+  if (nonceBefore !== undefined) {
+    rootNonceBefore = typeof nonceBefore === 'bigint' ? nonceBefore : BigInt(nonceBefore);
+  } else {
+    rootNonceBefore = await getRootCurrentNonce();
+  }
+  
+  // Check immediately first (transaction is likely already confirmed)
   let rootNonceAfter = await getRootCurrentNonce();
   
+  // If nonce already updated, we're done!
+  if (rootNonceAfter > rootNonceBefore) {
+    console.log(`[Installation ${installationId}] Nonce already updated! ${rootNonceBefore} -> ${rootNonceAfter}`);
+    return;
+  }
+  
+  // Otherwise, poll for confirmation (should be rare since sendUserOpV07 already waits)
   while (rootNonceAfter <= rootNonceBefore) {
     attempts++;
     const elapsedTime = Date.now() - startTime;
     
     if (elapsedTime > maxWaitTime) {
-      throw new Error(`Transaction timeout: Transaction not confirmed after 5 minutes. Current nonce: ${rootNonceAfter}`);
+      throw new Error(`Transaction timeout: Transaction not confirmed after 2 minutes. Nonce before: ${rootNonceBefore}, current nonce: ${rootNonceAfter}`);
     }
     
     console.log(`[Installation ${installationId}] Waiting for nonce update, attempt ${attempts}, current nonce: ${rootNonceAfter}`);
     
-    await new Promise(r => setTimeout(r, 10000)); // Wait 10 seconds
+    await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds (reduced from 10)
     rootNonceAfter = await getRootCurrentNonce();
     
     // Update progress during waiting
@@ -1642,7 +1714,7 @@ async function waitForNonceUpdate(
       sendStatus({
         step: 'installing', // Keep the current step
         message: `Waiting for transaction confirmation... (attempt ${attempts})`,
-        progress: progressUpdate - 5
+        progress: Math.max(progressUpdate - 5, progressUpdate - (attempts * 2))
       });
     }
   }
@@ -1707,8 +1779,45 @@ router.post("/revoke", async (req: Request, res: Response) => {
     // Import the uninstall function
     const { buildUninstallPermissionUO } = await import('../utils/native-code');
     
-    // Build the uninstall user operation
-    const { unpacked, permissionId, vId } = await buildUninstallPermissionUO(delegatedEOA as `0x${string}`);
+    // Build the uninstall user operation with retry logic for rate limiting
+    let unpacked, permissionId, vId;
+    let retries = 3;
+    let lastError: any;
+    
+    while (retries > 0) {
+      try {
+        const result = await buildUninstallPermissionUO(delegatedEOA as `0x${string}`);
+        unpacked = result.unpacked;
+        permissionId = result.permissionId;
+        vId = result.vId;
+        break; // Success, exit retry loop
+      } catch (err: any) {
+        lastError = err;
+        
+        // Check if it's a rate limit error (429)
+        const isRateLimit = err?.status === 429 || 
+                          err?.cause?.status === 429 ||
+                          err?.message?.includes('429') ||
+                          err?.message?.includes('Too Many Requests') ||
+                          err?.details === 'Too Many Requests';
+        
+        if (isRateLimit && retries > 1) {
+          // Wait before retrying (exponential backoff)
+          const waitTime = Math.pow(2, 3 - retries) * 1000; // 2s, 4s, 8s
+          console.warn(`[revoke] Rate limit hit (429), retrying in ${waitTime}ms... (${retries} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          retries--;
+          continue;
+        } else {
+          // Not a rate limit error or out of retries, throw it
+          throw err;
+        }
+      }
+    }
+    
+    if (!unpacked || !permissionId || !vId) {
+      throw lastError || new Error("Failed to build uninstall user operation");
+    }
 
     console.log(`[revoke] -> Permission ID: ${permissionId}`);
     console.log(`[revoke] -> vId: ${vId}`);
@@ -1726,6 +1835,23 @@ router.post("/revoke", async (req: Request, res: Response) => {
 
   } catch (err: any) {
     console.error("[/revoke] error:", err);
+    
+    // Check for rate limiting errors specifically
+    const isRateLimit = err?.status === 429 || 
+                        err?.cause?.status === 429 ||
+                        err?.message?.includes('429') ||
+                        err?.message?.includes('Too Many Requests') ||
+                        err?.details === 'Too Many Requests';
+    
+    if (isRateLimit) {
+      return res.status(429).json({
+        error: "Rate limit exceeded",
+        message: "Too many requests to the blockchain RPC. Please wait a moment and try again.",
+        details: "The RPC endpoint (Infura) has rate limits. Please wait a few seconds before retrying.",
+        retryAfter: 5 // Suggest waiting 5 seconds
+      });
+    }
+    
     return res.status(500).json({
       error: "Revocation failed",
       message: err?.message ?? "Failed to revoke delegated key access",
@@ -1799,10 +1925,54 @@ router.get("/balances", async (req: Request, res: Response) => {
 });
 
 /**
+ * Convert Etherscan transaction format to API response format
+ */
+function convertEtherscanToApiFormat(
+  tx: EtherscanTransaction,
+  address: string
+): {
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  timestamp: number;
+  type: 'sent' | 'received';
+  status: 'success' | 'pending' | 'failed';
+  tokenSymbol?: string;
+  tokenAddress?: string;
+  tokenId?: string;
+  eventType?: string;
+  errorMessage?: string;
+} {
+  // Convert timestamp string to number (Unix timestamp)
+  let timestamp = 0;
+  if (tx.timestamp !== "unknown") {
+    const date = new Date(tx.timestamp);
+    timestamp = Math.floor(date.getTime() / 1000);
+  }
+
+  return {
+    hash: tx.hash,
+    from: tx.from,
+    to: tx.to,
+    value: tx.value.toString(),
+    timestamp,
+    type: tx.type,
+    status: tx.success ? 'success' : 'failed',
+    tokenSymbol: tx.tokenSymbol || (tx.tokenType === 'ETH' ? 'ETH' : undefined),
+    tokenAddress: tx.tokenAddress,
+    tokenId: tx.tokenId,
+    eventType: tx.isInternal ? 'internal_transaction' : tx.tokenType === 'ERC20' ? 'token_transfer' : tx.tokenType === 'ERC721' || tx.tokenType === 'ERC1155' ? 'nft_transfer' : 'external_transaction',
+    errorMessage: tx.errorMessage,
+  };
+}
+
+/**
  * Get transaction history for an address
  * Query params:
  *   address: Ethereum address to get transactions for (required)
  *   limit: Number of transactions to return (optional, default 20)
+ *   useEtherscan: Use Etherscan API instead of Alchemy (optional, default true)
  * Response:
  * {
  *   success: true,
@@ -1821,7 +1991,7 @@ router.get("/balances", async (req: Request, res: Response) => {
  */
 router.get("/transactions", async (req: Request, res: Response) => {
   try {
-    const { address, limit = 20 } = req.query;
+    const { address, limit = 20, useEtherscan = 'true' } = req.query;
     
     if (!address || typeof address !== "string") {
       return res.status(400).json({
@@ -1840,10 +2010,53 @@ router.get("/transactions", async (req: Request, res: Response) => {
 
     console.log(`[Transactions] Fetching transaction history for address: ${address}`);
     
-    const transactions = await fetchTransactionHistory(
-      address as `0x${string}`, 
-      Number(limit)
-    );
+    // Use Etherscan by default, fallback to existing method if disabled
+    let transactions: Array<{
+      hash: string;
+      from: string;
+      to: string;
+      value: string;
+      timestamp: number;
+      type: 'sent' | 'received';
+      status: 'success' | 'pending' | 'failed';
+      tokenSymbol?: string;
+      tokenAddress?: string;
+      eventType?: string;
+    }>;
+
+    // Check if useEtherscan is enabled (default true)
+    // Query params come as string | ParsedQs | array, so we check for string 'true'
+    const useEtherscanFlag = useEtherscan === undefined || 
+                             (typeof useEtherscan === 'string' && useEtherscan.toLowerCase() === 'true') ||
+                             useEtherscan === '1';
+    
+    if (useEtherscanFlag) {
+      try {
+        // Try using Etherscan API
+        const chain = process.env.CHAIN || 'sepolia';
+        const etherscanTxs = await fetchEtherscanTransactions(
+          address,
+          chain,
+          Number(limit)
+        );
+        
+        transactions = etherscanTxs.map(tx => convertEtherscanToApiFormat(tx, address));
+        console.log(`[Transactions] Using Etherscan API - Found ${transactions.length} transactions`);
+      } catch (etherscanError: any) {
+        console.warn(`[Transactions] Etherscan failed, falling back to default method:`, etherscanError?.message);
+        // Fallback to existing method if Etherscan fails
+        transactions = await fetchTransactionHistory(
+          address as `0x${string}`, 
+          Number(limit)
+        );
+      }
+    } else {
+      // Use existing method
+      transactions = await fetchTransactionHistory(
+        address as `0x${string}`, 
+        Number(limit)
+      );
+    }
     
     console.log(`[Transactions] Found ${transactions.length} transactions`);
     

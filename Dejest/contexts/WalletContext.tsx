@@ -35,6 +35,8 @@ export interface CryptoData {
     symbol: string;
     value: number;
     timestamp: Date;
+    status?: 'success' | 'pending' | 'failed';
+    errorMessage?: string;
   }>;
 }
 
@@ -157,7 +159,11 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
           }
           
           // Use token symbol from transaction, default to ETH
-          const symbol = tx.tokenSymbol || 'ETH';
+          // For NFTs, include token ID in the symbol
+          let symbol = tx.tokenSymbol || 'ETH';
+          if (tx.tokenId && (symbol.includes('NFT') || !tx.tokenSymbol)) {
+            symbol = `${symbol} #${tx.tokenId}`;
+          }
           
           // Map transaction types
           const transactionType = tx.type === 'sent' ? 'send' as const : 'receive' as const;
@@ -182,8 +188,12 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
             value = numericAmount * 0; // Unknown tokens, would need price API
           }
 
+          // Create unique ID by combining hash, from, to, eventType, tokenAddress, and tokenId to handle duplicates
+          // Internal transactions, token transfers, and NFTs with the same hash need unique IDs
+          const uniqueId = `${tx.hash}-${tx.from || 'unknown'}-${tx.to || 'unknown'}-${tx.eventType || 'external'}-${tx.tokenAddress || ''}-${tx.tokenId || ''}-${tx.value}`;
+          
           return {
-            id: tx.hash,
+            id: uniqueId,
             type: transactionType,
             from: tx.from !== targetAddress ? tx.from : undefined,
             to: tx.to !== targetAddress ? tx.to : undefined,
@@ -191,6 +201,8 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
             symbol,
             value,
             timestamp,
+            status: tx.status || 'success', // Default to success if not specified
+            errorMessage: tx.errorMessage,
           };
         })
         .filter((tx): tx is NonNullable<typeof tx> => tx !== null); // Remove null entries

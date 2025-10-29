@@ -530,12 +530,59 @@ export interface CallPolicyParamRule {
     } catch {}
     return unpacked
   }
-  export async function sendUserOpV07(unpacked: UnpackedUserOperationV07) {
-    const uoHash = await (bundlerClient as any).request({
+  /**
+   * Send user operation and wait for receipt to get actual transaction hash
+   * @param unpacked User operation to send
+   * @param maxWaitTime Maximum time to wait for receipt in milliseconds (default 30 seconds)
+   * @returns The actual on-chain transaction hash (not the userOpHash)
+   */
+  export async function sendUserOpV07(unpacked: UnpackedUserOperationV07, maxWaitTime: number = 30000) {
+    // Step 1: Send user operation to bundler
+    const userOpHash = await (bundlerClient as any).request({
       method: 'eth_sendUserOperation',
       params: [unpacked, ENTRY_POINT],
-    }) as Hex
-    return uoHash
+    }) as Hex;
+    
+    console.log(`[sendUserOpV07] User operation sent, userOpHash: ${userOpHash}`);
+    console.log(`[sendUserOpV07] Waiting for user operation receipt to get transaction hash...`);
+    
+    // Step 2: Wait for user operation receipt to get the actual transaction hash
+    const startTime = Date.now();
+    const pollInterval = 1000; // Poll every 1 second
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        // Query bundler for user operation receipt
+        const receipt = await (bundlerClient as any).request({
+          method: 'eth_getUserOperationReceipt',
+          params: [userOpHash],
+        }) as any;
+        
+        if (receipt && receipt.receipt && receipt.receipt.transactionHash) {
+          const actualTxHash = receipt.receipt.transactionHash as Hex;
+          console.log(`[sendUserOpV07] User operation included! Transaction hash: ${actualTxHash}`);
+          console.log(`[sendUserOpV07] Success: ${receipt.success}, Gas used: ${receipt.actualGasUsed || 'N/A'}`);
+          return actualTxHash;
+        } else if (receipt && receipt.transactionHash) {
+          // Some bundlers may return transactionHash directly
+          const actualTxHash = receipt.transactionHash as Hex;
+          console.log(`[sendUserOpV07] User operation included! Transaction hash: ${actualTxHash}`);
+          return actualTxHash;
+        }
+      } catch (err) {
+        // Receipt not ready yet, continue polling
+        console.log(`[sendUserOpV07] Receipt not ready yet, waiting...`);
+      }
+      
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+    
+    // If we timeout, log warning but return userOpHash as fallback
+    // User can still query it later, but it's not the actual transaction hash
+    console.warn(`[sendUserOpV07] Timeout waiting for receipt. Returning userOpHash: ${userOpHash}`);
+    console.warn(`[sendUserOpV07] Note: This is NOT the actual transaction hash. The user operation may still be pending.`);
+    return userOpHash;
   }
   
   

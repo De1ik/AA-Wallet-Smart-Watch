@@ -111,22 +111,41 @@ export default function TransactionsScreen() {
               <View style={styles.transactionIconContainer}>
                 <View style={[
                   styles.transactionIcon, 
-                  { backgroundColor: transaction.type === 'receive' ? '#10B981' : '#6B7280' }
+                  { 
+                    backgroundColor: transaction.status === 'failed' 
+                      ? '#EF4444' 
+                      : transaction.type === 'receive' 
+                        ? '#10B981' 
+                        : '#6B7280' 
+                  }
                 ]}>
                   <IconSymbol 
-                    name={transaction.type === 'receive' ? "arrow.down.left" : "arrow.up.right"} 
+                    name={transaction.status === 'failed' 
+                      ? "exclamationmark.triangle.fill"
+                      : transaction.type === 'receive' 
+                        ? "arrow.down.left" 
+                        : "arrow.up.right"} 
                     size={20} 
                     color="#FFFFFF" 
                   />
                 </View>
               </View>
               <View style={styles.transactionInfo}>
-                <Text style={styles.transactionTitle}>
-                  {transaction.type === 'receive' 
-                    ? `Received from ${transaction.from ? transaction.from.slice(0, 6) + '...' + transaction.from.slice(-4) : 'Unknown'}` 
-                    : `Sent to ${transaction.to ? transaction.to.slice(0, 6) + '...' + transaction.to.slice(-4) : 'Unknown'}`
-                  }
-                </Text>
+                <View style={styles.transactionTitleRow}>
+                  <Text style={styles.transactionTitle}>
+                    {transaction.status === 'failed' 
+                      ? `Failed ${transaction.type === 'receive' ? 'Receipt' : 'Send'}`
+                      : transaction.type === 'receive' 
+                        ? `Received from ${transaction.from ? transaction.from.slice(0, 6) + '...' + transaction.from.slice(-4) : 'Unknown'}` 
+                        : `Sent to ${transaction.to ? transaction.to.slice(0, 6) + '...' + transaction.to.slice(-4) : 'Unknown'}`
+                    }
+                  </Text>
+                  {transaction.status === 'failed' && (
+                    <View style={styles.failedBadge}>
+                      <Text style={styles.failedBadgeText}>Failed</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.transactionTime}>{formatTime(transaction.timestamp)}</Text>
               </View>
               <View style={styles.transactionAmount}>
@@ -175,6 +194,34 @@ export default function TransactionsScreen() {
                       {selectedTransaction.type === 'receive' ? 'Received' : 'Sent'}
                     </Text>
                   </View>
+
+                  {selectedTransaction.status && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Status</Text>
+                      <View style={styles.statusContainer}>
+                        <View style={[
+                          styles.statusBadge,
+                          { backgroundColor: selectedTransaction.status === 'failed' ? '#EF444420' : selectedTransaction.status === 'success' ? '#10B98120' : '#F59E0B20' }
+                        ]}>
+                          <Text style={[
+                            styles.statusText,
+                            { color: selectedTransaction.status === 'failed' ? '#EF4444' : selectedTransaction.status === 'success' ? '#10B981' : '#F59E0B' }
+                          ]}>
+                            {selectedTransaction.status === 'failed' ? 'Failed' : selectedTransaction.status === 'success' ? 'Success' : 'Pending'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+
+                  {selectedTransaction.errorMessage && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Error</Text>
+                      <Text style={[styles.detailValue, { color: '#EF4444' }]}>
+                        {selectedTransaction.errorMessage}
+                      </Text>
+                    </View>
+                  )}
 
                   {selectedTransaction.from && (
                     <View style={styles.detailRow}>
@@ -346,11 +393,29 @@ const styles = StyleSheet.create({
   transactionInfo: {
     flex: 1,
   },
+  transactionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
   transactionTitle: {
     fontSize: 16,
     fontWeight: '500',
     color: '#FFFFFF',
-    marginBottom: 4,
+    flex: 1,
+  },
+  failedBadge: {
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  failedBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
   },
   transactionTime: {
     fontSize: 14,
@@ -434,6 +499,19 @@ const styles = StyleSheet.create({
   },
   copyButton: {
     padding: 4,
+  },
+  statusContainer: {
+    marginTop: 4,
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 

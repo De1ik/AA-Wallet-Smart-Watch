@@ -113,6 +113,8 @@ export interface Transaction {
   tokenSymbol?: string;
   tokenAddress?: string;
   eventType?: string;
+  errorMessage?: string;
+  tokenId?: string; // For NFTs
 }
 
 export interface TransactionsResponse {
