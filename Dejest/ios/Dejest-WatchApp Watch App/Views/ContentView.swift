@@ -15,12 +15,14 @@ struct ContentView: View {
         switch session.currentScreen {
         case .home:
             TabView {
-                DelegatedAddressView()
-                    .tabItem { Label("Home", systemImage: "house") }
+                BalanceView()
+                    .tabItem { Label("Balance", systemImage: "creditcard") }
+                
+                // DelegatedAddressView()
+                //     .tabItem { Label("Address", systemImage: "person") }
                 
                 TransactionView()
                     .tabItem { Label("Transactions", systemImage: "arrow.up.arrow.down") }
-                
             }
         case .transactions:
             TransactionView()
@@ -57,4 +59,3 @@ struct ContentView: View {
 //#Preview {
 //    ContentView()
 //}
-
