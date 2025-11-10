@@ -214,15 +214,16 @@ final class AccountStateService {
                 return
             }
             
-            guard
-                let httpResponse = response as? HTTPURLResponse,
-                (200..<300).contains(httpResponse.statusCode)
-            else {
-                completion(.failure(AccountStateServiceError.backend(message: "Backend responded with an error.")))
+            let responseData = data
+            
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                let message = self.extractBackendMessage(from: responseData) ?? "Backend responded with an error."
+                completion(.failure(AccountStateServiceError.backend(message: message)))
                 return
             }
             
-            guard let data = data else {
+            guard let data = responseData, !data.isEmpty else {
                 completion(.failure(AccountStateServiceError.emptyResponse))
                 return
             }
@@ -232,9 +233,73 @@ final class AccountStateService {
                 let decoded = try decoder.decode(T.self, from: data)
                 completion(.success(decoded))
             } catch {
-                completion(.failure(error))
+                let message = self.extractBackendMessage(from: data) ?? error.localizedDescription
+                completion(.failure(AccountStateServiceError.backend(message: message)))
             }
         }
         task.resume()
+    }
+    
+    private func extractBackendMessage(from data: Data?) -> String? {
+        guard let data = data, !data.isEmpty else { return nil }
+        
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let message = firstMessage(in: json) {
+                return message
+            }
+        }
+        
+        if let text = String(data: data, encoding: .utf8),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return interpretMessage(text)
+        }
+        
+        return nil
+    }
+    
+    private func firstMessage(in dictionary: [String: Any]) -> String? {
+        let keys = ["message", "error", "reason", "details", "data"]
+        for key in keys {
+            if let value = dictionary[key] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if key == "data", let friendly = selectorFriendlyMessage(in: value) {
+                    return friendly
+                }
+                return interpretMessage(value)
+            }
+            
+            if let nested = dictionary[key] as? [String: Any],
+               let nestedMessage = firstMessage(in: nested) {
+                return nestedMessage
+            }
+            
+            if let array = dictionary[key] as? [String],
+               let first = array.first,
+               !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return interpretMessage(first)
+            }
+        }
+        return nil
+    }
+    
+    private func interpretMessage(_ text: String) -> String {
+        if let friendly = selectorFriendlyMessage(in: text) {
+            return friendly
+        }
+        return text
+    }
+    
+    private func selectorFriendlyMessage(in text: String) -> String? {
+        let lower = text.lowercased()
+        if lower.contains("0xb32eeb69") {
+            return "Permission is not granted for this account. Approve spending in the mobile app."
+        }
+        if lower.contains("0x27bf05de") {
+            return "Spending limit for this token has been exceeded."
+        }
+        if lower.contains("0x7b5812d4") {
+            return "Defined policy rules were violated for this transaction."
+        }
+        return nil
     }
 }

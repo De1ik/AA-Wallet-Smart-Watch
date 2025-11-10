@@ -9,6 +9,7 @@ import {
   } from 'viem'
   import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
   import { mainnet, sepolia } from 'viem/chains'
+  import { getEntryPointAddress, getKernelAddress, getPrivateKey } from './config'
 
   
     export const FACTORY: `0x${string}` = "0x2577507b78c2008Ff367261CB6285d44ba5eF2E9";
@@ -18,14 +19,15 @@ import {
   
   
   // ===== CONFIG =====
-  const ENTRY_POINT: Address = ENTRY_POINT_V7
+  const DEFAULT_KERNEL: Address = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A'
+  const ENTRY_POINT: Address = (getEntryPointAddress() ?? ENTRY_POINT_V7) as Address
   // const KERNEL: Address      = '0x6406c7D4972fa71e83AF0a577CDF40dD0caE963a'
-  const KERNEL: Address      = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A'
+  const KERNEL: Address      = (getKernelAddress() ?? DEFAULT_KERNEL) as Address
   const BUNDLER_RPC_URL      = 'https://api.pimlico.io/v2/11155111/rpc?apikey=pim_TSXZcxdAYixqPvzchXp64f'
   const ETH_RPC_URL          = 'https://sepolia.infura.io/v3/7df085afafad4becaad36c48fb162932'
   
   // root / delegated
-  const ROOT_PRIV       = '0x5b90e4bb58e7731445eb523f9409e4b47f29f5356cf7df6873559623e60761e0'
+  const ROOT_PRIV       = getPrivateKey() ?? '0x5b90e4bb58e7731445eb523f9409e4b47f29f5356cf7df6873559623e60761e0'
   // const DELEGATED_PK    = '0x20383bc29b876e46b53b71e40c132ebecc6dc5747c79f6017c24813d999e1e8b'
   const DELEGATED_PK    = '0xeb020020f40c89748cfbcd6f455d3251ee5aa201237553c31bc7353a8b6dadfa'
   const delegated       = privateKeyToAccount(DELEGATED_PK as Hex)

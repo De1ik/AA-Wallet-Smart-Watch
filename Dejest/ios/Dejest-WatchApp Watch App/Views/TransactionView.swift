@@ -165,11 +165,8 @@ struct TransactionView: View {
                     }
                     
                     if !errorText.isEmpty {
-                        Text(errorText)
-                            .font(.system(size: 12))
-                            .foregroundColor(.red)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        TransactionErrorBanner(message: errorText)
+                            .padding(.top, 8)
                     }
                 }
                 .padding()
@@ -187,6 +184,43 @@ struct TransactionView: View {
                 updateSelectedReceiver(index: index)
                 showReceiverPicker = false
             }
+        }
+    }
+    
+    private struct TransactionErrorBanner: View {
+        let message: String
+        
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(Color(hex: "EF4444"))
+                    
+                    Text("Action required")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                
+                Text(message)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.leading)
+                
+                Text("Fix the issue in the mobile app and try again.")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color(hex: "EF4444").opacity(0.6), lineWidth: 1)
+            )
         }
     }
     

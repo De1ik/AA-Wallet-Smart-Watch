@@ -18,16 +18,17 @@ import {
   
   
   // ===== CONFIG =====
-  const ENTRY_POINT: Address = ENTRY_POINT_V7
+  const DEFAULT_KERNEL: Address = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A'
+  const ENTRY_POINT: Address = (process.env.ENTRY_POINT ?? ENTRY_POINT_V7) as Address
   // const KERNEL: Address      = '0x6406c7D4972fa71e83AF0a577CDF40dD0caE963a'
-  const KERNEL: Address      = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A'
+  const KERNEL: Address      = (process.env.KERNEL ?? DEFAULT_KERNEL) as Address
   const BUNDLER_RPC_URL      = 'https://api.pimlico.io/v2/11155111/rpc?apikey=pim_TSXZcxdAYixqPvzchXp64f'
   const ETH_RPC_URL          = 'https://sepolia.infura.io/v3/7df085afafad4becaad36c48fb162932'
   
   // root / delegated
-  const ROOT_PRIV       = '0x5b90e4bb58e7731445eb523f9409e4b47f29f5356cf7df6873559623e60761e0'
+  const ROOT_PRIV       = (process.env.PRIVATE_KEY ?? '0x5b90e4bb58e7731445eb523f9409e4b47f29f5356cf7df6873559623e60761e0')
   // const DELEGATED_PK    = '0x20383bc29b876e46b53b71e40c132ebecc6dc5747c79f6017c24813d999e1e8b'
-  const DELEGATED_PK    = '0xeb020020f40c89748cfbcd6f455d3251ee5aa201237553c31bc7353a8b6dadfa'
+  const DELEGATED_PK    = process.env.DELEGATED_PRIVATE_KEY ?? '0xeb020020f40c89748cfbcd6f455d3251ee5aa201237553c31bc7353a8b6dadfa'
   const delegated       = privateKeyToAccount(DELEGATED_PK as Hex)
   const root            = privateKeyToAccount(ROOT_PRIV as Hex)
   
@@ -46,9 +47,9 @@ const DEPOSIT_AMOUNT   = parseEther('0.003')
 // Dynamic fee configuration
 const FEE_MULTIPLIER = 12n; // 20% buffer above network rates (1.2 * 10 = 12)
 const MIN_FEE_PER_GAS = 1n * 10n ** 9n; // 1 gwei minimum
-const MAX_FEE_PER_GAS_LIMIT = 50n * 10n ** 9n; // 50 gwei maximum
+const MAX_FEE_PER_GAS_LIMIT = 200n * 10n ** 9n; // 200 gwei safety cap
 const MIN_PRIORITY_FEE = 1n * 10n ** 8n; // 0.1 gwei minimum (0.1 * 1e9)
-const MAX_PRIORITY_FEE_LIMIT = 10n * 10n ** 9n; // 10 gwei maximum
+const MAX_PRIORITY_FEE_LIMIT = 20n * 10n ** 9n; // 20 gwei maximum
   
   // test transfer
   const TARGET: Address  = '0xe069d36Fe1f7B41c7B8D4d453d99D4D86d620c15'
@@ -424,45 +425,51 @@ export interface CallPolicyParamRule {
     try {
       console.log('🔍 Fetching current gas prices...');
       
-      // Get fee history to calculate dynamic fees
-      const feeHistory = await (publicClient as any).request({
-        method: 'eth_feeHistory',
-        params: [4, 'latest', [25, 50, 75]] // Last 4 blocks, percentiles
-      });
+      let estimatedMaxFee: bigint | undefined;
+      let estimatedPriorityFee: bigint | undefined;
       
-      // Calculate base fee (average of last few blocks)
-      const baseFeePerGas = feeHistory.baseFeePerGas;
-      const latestBaseFee = BigInt(baseFeePerGas[baseFeePerGas.length - 1]);
+      try {
+        const feeData = await publicClient.estimateFeesPerGas();
+        estimatedMaxFee =
+          feeData.maxFeePerGas ??
+          feeData.gasPrice ??
+          undefined;
+        estimatedPriorityFee =
+          feeData.maxPriorityFeePerGas ??
+          undefined;
+      } catch (estimateError) {
+        console.warn('⚠️ estimateFeesPerGas failed, falling back to gasPrice:', estimateError);
+      }
       
-      // Calculate priority fee (median of 50th percentile)
-      const priorityFees = feeHistory.reward
-        .map((blockRewards: any[]) => BigInt(blockRewards[1])) // 50th percentile
-        .filter((fee: bigint) => fee > 0n);
+      if (!estimatedMaxFee) {
+        estimatedMaxFee = await publicClient.getGasPrice();
+      }
       
-      const medianPriorityFee = priorityFees.length > 0 
-        ? priorityFees.sort((a: bigint, b: bigint) => Number(a - b))[Math.floor(priorityFees.length / 2)]
-        : MIN_PRIORITY_FEE;
+      if (!estimatedPriorityFee) {
+        estimatedPriorityFee = estimatedMaxFee / 5n; // Aim for ~20% of the total fee
+      }
       
-      // Calculate dynamic fees
-      let maxFeePerGas = latestBaseFee + medianPriorityFee;
-      maxFeePerGas = (maxFeePerGas * FEE_MULTIPLIER) / 10n; // Apply 20% buffer
+      let maxFeePerGas = (estimatedMaxFee * FEE_MULTIPLIER) / 10n; // Apply buffer
+      let maxPriorityFeePerGas = estimatedPriorityFee;
       
-      // Apply limits
+      // Clamp values
       maxFeePerGas = maxFeePerGas < MIN_FEE_PER_GAS ? MIN_FEE_PER_GAS : maxFeePerGas;
       maxFeePerGas = maxFeePerGas > MAX_FEE_PER_GAS_LIMIT ? MAX_FEE_PER_GAS_LIMIT : maxFeePerGas;
       
-      const maxPriorityFeePerGas = medianPriorityFee < MIN_PRIORITY_FEE ? MIN_PRIORITY_FEE : medianPriorityFee;
-      const cappedPriorityFee = maxPriorityFeePerGas > MAX_PRIORITY_FEE_LIMIT ? MAX_PRIORITY_FEE_LIMIT : maxPriorityFeePerGas;
+      maxPriorityFeePerGas = maxPriorityFeePerGas < MIN_PRIORITY_FEE ? MIN_PRIORITY_FEE : maxPriorityFeePerGas;
+      maxPriorityFeePerGas = maxPriorityFeePerGas > MAX_PRIORITY_FEE_LIMIT ? MAX_PRIORITY_FEE_LIMIT : maxPriorityFeePerGas;
+      
+      if (maxPriorityFeePerGas > maxFeePerGas) {
+        maxPriorityFeePerGas = maxFeePerGas;
+      }
       
       console.log('💰 Dynamic gas prices calculated:');
-      console.log(`   Base Fee: ${latestBaseFee.toString()} wei`);
-      console.log(`   Priority Fee: ${cappedPriorityFee.toString()} wei`);
-      console.log(`   Max Fee: ${maxFeePerGas.toString()} wei`);
-      console.log(`   Max Fee: ${Number(maxFeePerGas) / 1e9} gwei`);
+      console.log(`   Max Fee: ${maxFeePerGas.toString()} wei (${(Number(maxFeePerGas) / 1e9).toFixed(2)} gwei)`);
+      console.log(`   Priority Fee: ${maxPriorityFeePerGas.toString()} wei (${(Number(maxPriorityFeePerGas) / 1e9).toFixed(2)} gwei)`);
       
       return {
         maxFeePerGas,
-        maxPriorityFeePerGas: cappedPriorityFee
+        maxPriorityFeePerGas
       };
       
     } catch (error) {
@@ -536,8 +543,45 @@ export interface CallPolicyParamRule {
    * @param maxWaitTime Maximum time to wait for receipt in milliseconds (default 30 seconds)
    * @returns The actual on-chain transaction hash (not the userOpHash)
    */
-  export async function sendUserOpV07(unpacked: UnpackedUserOperationV07, maxWaitTime: number = 30000) {
-    // Step 1: Send user operation to bundler
+  export interface SendUserOpResult {
+    txHash: Hex;
+    userOpHash: Hex;
+    success: boolean;
+    gasUsed?: string;
+    revertReason?: string;
+  }
+  
+  export class UserOpExecutionError extends Error {
+    result: SendUserOpResult;
+    constructor(message: string, result: SendUserOpResult) {
+      super(message);
+      this.name = 'UserOpExecutionError';
+      this.result = result;
+    }
+  }
+  
+  function normalizeStatus(receipt: any): boolean | undefined {
+    if (typeof receipt?.success === 'boolean') {
+      return receipt.success;
+    }
+    const status = receipt?.receipt?.status ?? receipt?.status;
+    if (typeof status === 'string') {
+      return status === '0x1' || status === '1';
+    }
+    if (typeof status === 'number') {
+      return status === 1;
+    }
+    return undefined;
+  }
+  
+  function extractRevertReason(receipt: any): string | undefined {
+    return receipt?.reason
+      ?? receipt?.returnInfo?.revertReason
+      ?? receipt?.returnInfo?.error
+      ?? receipt?.paymasterInfo?.context;
+  }
+  
+  export async function sendUserOpV07(unpacked: UnpackedUserOperationV07, maxWaitTime: number = 45000): Promise<SendUserOpResult> {
     const userOpHash = await (bundlerClient as any).request({
       method: 'eth_sendUserOperation',
       params: [unpacked, ENTRY_POINT],
@@ -546,43 +590,63 @@ export interface CallPolicyParamRule {
     console.log(`[sendUserOpV07] User operation sent, userOpHash: ${userOpHash}`);
     console.log(`[sendUserOpV07] Waiting for user operation receipt to get transaction hash...`);
     
-    // Step 2: Wait for user operation receipt to get the actual transaction hash
     const startTime = Date.now();
-    const pollInterval = 1000; // Poll every 1 second
+    const pollInterval = 1500;
     
     while (Date.now() - startTime < maxWaitTime) {
       try {
-        // Query bundler for user operation receipt
         const receipt = await (bundlerClient as any).request({
           method: 'eth_getUserOperationReceipt',
           params: [userOpHash],
         }) as any;
         
-        if (receipt && receipt.receipt && receipt.receipt.transactionHash) {
-          const actualTxHash = receipt.receipt.transactionHash as Hex;
-          console.log(`[sendUserOpV07] User operation included! Transaction hash: ${actualTxHash}`);
-          console.log(`[sendUserOpV07] Success: ${receipt.success}, Gas used: ${receipt.actualGasUsed || 'N/A'}`);
-          return actualTxHash;
-        } else if (receipt && receipt.transactionHash) {
-          // Some bundlers may return transactionHash directly
-          const actualTxHash = receipt.transactionHash as Hex;
-          console.log(`[sendUserOpV07] User operation included! Transaction hash: ${actualTxHash}`);
-          return actualTxHash;
+        if (!receipt) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+          continue;
         }
+        
+        const actualTxHash =
+          receipt.receipt?.transactionHash ??
+          receipt.transactionHash ??
+          userOpHash;
+        const gasUsedRaw = receipt.actualGasUsed ?? receipt.receipt?.gasUsed;
+        const gasUsed = typeof gasUsedRaw === 'string' ? gasUsedRaw : gasUsedRaw?.toString();
+        const success = normalizeStatus(receipt);
+        const revertReason = success ? undefined : extractRevertReason(receipt);
+        
+        console.log(`[sendUserOpV07] User operation included! Transaction hash: ${actualTxHash}`);
+        console.log(`[sendUserOpV07] Success: ${success}, Gas used: ${gasUsed ?? 'N/A'}`);
+        
+        const result: SendUserOpResult = {
+          txHash: actualTxHash as Hex,
+          userOpHash,
+          success: success ?? true,
+          gasUsed,
+          revertReason,
+        };
+        
+        if (success === false) {
+          throw new UserOpExecutionError(revertReason ?? 'User operation failed', result);
+        }
+        
+        return result;
       } catch (err) {
-        // Receipt not ready yet, continue polling
+        if (err instanceof UserOpExecutionError) {
+          throw err;
+        }
         console.log(`[sendUserOpV07] Receipt not ready yet, waiting...`);
       }
       
-      // Wait before next poll
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
     
-    // If we timeout, log warning but return userOpHash as fallback
-    // User can still query it later, but it's not the actual transaction hash
-    console.warn(`[sendUserOpV07] Timeout waiting for receipt. Returning userOpHash: ${userOpHash}`);
-    console.warn(`[sendUserOpV07] Note: This is NOT the actual transaction hash. The user operation may still be pending.`);
-    return userOpHash;
+    const timeoutResult: SendUserOpResult = {
+      txHash: userOpHash,
+      userOpHash,
+      success: false,
+      revertReason: 'Timeout waiting for user operation receipt',
+    };
+    throw new UserOpExecutionError('Timed out waiting for user operation receipt', timeoutResult);
   }
   
   
@@ -2309,4 +2373,3 @@ export async function fetchTransactionHistory(
     return [];
   }
 }
-  

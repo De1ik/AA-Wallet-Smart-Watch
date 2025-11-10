@@ -42,9 +42,19 @@ class UserOpManager {
                 return
             }
             
-            guard let data = data else {
-                completion(.failure(NSError(domain: "Wallet", code: -1,
-                                            userInfo: [NSLocalizedDescriptionKey: "Empty response"])))
+            let responseData = data
+            
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                completion(.failure(self.makeBackendError(from: responseData,
+                                                          fallback: "Failed to prepare transaction.",
+                                                          statusCode: httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = responseData else {
+                completion(.failure(self.makeBackendError(from: nil,
+                                                          fallback: "Empty response from backend.")))
                 return
             }
             
@@ -57,7 +67,8 @@ class UserOpManager {
                 let response = try decoder.decode(PrepareUserOpResponse.self, from: data)
                 completion(.success(response))
             } catch {
-                completion(.failure(error))
+                completion(.failure(self.makeBackendError(from: data,
+                                                          fallback: error.localizedDescription)))
             }
         }.resume()
     }
@@ -115,9 +126,19 @@ class UserOpManager {
                 return
             }
             
-            guard let data = data else {
-                completion(.failure(NSError(domain: "UserOp", code: -3,
-                                            userInfo: [NSLocalizedDescriptionKey: "Empty response"])))
+            let responseData = data
+            
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                completion(.failure(self.makeBackendError(from: responseData,
+                                                          fallback: "Failed to broadcast transaction.",
+                                                          statusCode: httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = responseData else {
+                completion(.failure(self.makeBackendError(from: nil,
+                                                          fallback: "Empty response from backend.")))
                 return
             }
             
@@ -130,11 +151,12 @@ class UserOpManager {
                 if let txHash = json?["txHash"] as? String {
                     completion(.success(txHash))
                 } else {
-                    completion(.failure(NSError(domain: "UserOp", code: -4,
-                                                userInfo: [NSLocalizedDescriptionKey: "Invalid backend response"])))
+                    completion(.failure(self.makeBackendError(from: data,
+                                                              fallback: "Invalid backend response.")))
                 }
             } catch {
-                completion(.failure(error))
+                completion(.failure(self.makeBackendError(from: data,
+                                                          fallback: error.localizedDescription)))
             }
         }.resume()
     }
@@ -164,5 +186,97 @@ class UserOpManager {
                 completion(.failure(error))
             }
         }
+    }
+    
+    // MARK: - Error handling helpers
+    private struct BackendError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+    
+    private func makeBackendError(from data: Data?, fallback: String, statusCode: Int? = nil) -> Error {
+        if let data = data,
+           let message = extractMessage(from: data) {
+            return BackendError(message: message)
+        }
+        
+        if let statusCode = statusCode {
+            return BackendError(message: interpretMessage("\(fallback) (\(statusCode))"))
+        }
+        
+        return BackendError(message: interpretMessage(fallback))
+    }
+    
+    private func extractMessage(from data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+        
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let nestedError = json["error"] as? [String: Any],
+               let nestedMessage = firstMessage(in: nestedError) {
+                return interpretMessage(nestedMessage)
+            }
+            
+            if let message = firstMessage(in: json) {
+                return interpretMessage(message)
+            }
+            
+            if let dataField = json["data"] as? String,
+               let friendly = selectorFriendlyMessage(in: dataField) {
+                return friendly
+            }
+        }
+        
+        if let text = String(data: data, encoding: .utf8),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return interpretMessage(text)
+        }
+        
+        return nil
+    }
+    
+    private func firstMessage(in dictionary: [String: Any]) -> String? {
+        let keys = ["message", "error", "reason", "details", "data"]
+        for key in keys {
+            if let value = dictionary[key] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if key == "data", let friendly = selectorFriendlyMessage(in: value) {
+                    return friendly
+                }
+                return value
+            }
+            
+            if let nested = dictionary[key] as? [String: Any],
+               let nestedMessage = firstMessage(in: nested) {
+                return nestedMessage
+            }
+            
+            if let array = dictionary[key] as? [String],
+               let first = array.first,
+               !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return first
+            }
+        }
+        return nil
+    }
+    
+    private func interpretMessage(_ text: String) -> String {
+        if let friendly = selectorFriendlyMessage(in: text) {
+            return friendly
+        }
+        return text
+    }
+    
+    private func selectorFriendlyMessage(in text: String) -> String? {
+        let lower = text.lowercased()
+        if lower.contains("0xb32eeb69") {
+            return "Permission is not granted for this account. Approve spending in the mobile app."
+        }
+        if lower.contains("0x27bf05de") {
+            return "Spending limit for this token has been exceeded."
+        }
+        if lower.contains("0x7b5812d4") {
+            return "Defined policy rules were violated for this transaction."
+        }
+        return nil
     }
 }

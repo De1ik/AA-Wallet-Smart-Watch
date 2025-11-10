@@ -41,7 +41,7 @@ struct BalanceView: View {
                     refreshButton
                 }
                 .padding(.horizontal)
-                .padding(.top, 6)
+                // .padding(.top, 2)
                 .padding(.bottom)
             }
         }
@@ -100,7 +100,7 @@ struct BalanceView: View {
                     .multilineTextAlignment(.center)
             } else if let balance = accountState?.ethBalance {
                 Text("\(formattedBalance(balance)) ETH")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
             } else {
                 Text("Balance unavailable")

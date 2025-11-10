@@ -69,13 +69,22 @@ export interface PrefundCheckResponse {
   depositWei?: string;
   requiredPrefundWei?: string;
   shortfallWei?: string;
+  kernelAddress?: string;
+  entryPointAddress?: string;
 }
 
 export interface EntryPointDepositResponse {
   success: boolean;
   txHash?: string;
+  userOpHash?: string;
   message: string;
   error?: string;
+  kernelAddress?: string;
+  entryPointAddress?: string;
+  amountWei?: string;
+  gasUsed?: string;
+  revertReason?: string;
+  details?: string;
 }
 
 export interface RevokeKeyResponse {
@@ -278,6 +287,8 @@ class ApiClient {
         hasPrefund: false,
         message: trackedError,
         error: trackedError,
+        kernelAddress: config.KERNEL,
+        entryPointAddress: config.ENTRY_POINT,
       };
     }
   }

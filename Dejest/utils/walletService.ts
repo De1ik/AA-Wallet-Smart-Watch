@@ -114,12 +114,6 @@ export async function sendTransaction({
     const txHash = await sendUserOpV07(unp2);
     console.log('[sendTransaction] -> txHash:', txHash);
     
-    // TODO: Implement using your native-code.ts functions
-    // For now, return a mock transaction hash
-    // You'll need to export the functions from native-code.ts and use them here
-    
-    
-    // Mock transaction hash for now
     
     console.log("[sendTransaction] -> Transaction sent successfully:", txHash);
     return txHash;

@@ -19,6 +19,7 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    PRIVATE_KEY_TEST=true
    PRIVATE_KEY=0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
    KERNEL=0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A
+   ENTRY_POINT=0x0000000071727De22E5E9d8BAf0edAc6f37da032
 
    # Development shortcuts
    SKIP_SEED=true
@@ -36,6 +37,7 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    - `PRIVATE_KEY_TEST`: Set to `true` for test mode, `false` or omit for production
    - `PRIVATE_KEY`: Private key for testing (when `PRIVATE_KEY_TEST=true`)
    - `KERNEL`: Kernel address to use as public address in test mode
+   - `ENTRY_POINT`: EntryPoint contract to target (defaults to the canonical v0.7 address)
    - `SKIP_SEED`: Set to `true` to skip seed phrase verification during wallet creation
    - `ZERODEV_RPC`: Your ZeroDev RPC URL
    - `ZERODEV_PROJECT_ID`: Your ZeroDev project ID

@@ -8,6 +8,7 @@ import {
   getPermissionId,
   getVId,
   sendUserOpV07,
+  SendUserOpResult,
   UnpackedUserOperationV07,
   buildInstallPermissionUO,
   buildInstallCallPolicyUO,
@@ -35,6 +36,12 @@ import { wsService } from "../index";
 
 const router = Router();
 
+const DEFAULT_KERNEL_ADDRESS = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+const DEFAULT_ENTRY_POINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+
+const KERNEL_ADDRESS = (process.env.KERNEL ?? DEFAULT_KERNEL_ADDRESS) as `0x${string}`;
+const ENTRY_POINT_ADDRESS = (process.env.ENTRY_POINT ?? DEFAULT_ENTRY_POINT_ADDRESS) as `0x${string}`;
+
 // Helper function to check prefund status directly
 interface PrefundStatus {
   hasPrefund: boolean;
@@ -42,12 +49,14 @@ interface PrefundStatus {
   depositWei: string;
   requiredPrefundWei: string;
   shortfallWei: string;
+  kernelAddress: string;
+  entryPointAddress: string;
 }
 
 async function checkPrefundSimple(): Promise<PrefundStatus> {
   try {
-    const KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
-    const ENTRY_POINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+    const kernelAddress = KERNEL_ADDRESS;
+    const entryPointAddress = ENTRY_POINT_ADDRESS;
     
     // Import required functions
     const { createPublicClient, http, parseAbi, parseEther } = await import('viem');
@@ -62,10 +71,10 @@ async function checkPrefundSimple(): Promise<PrefundStatus> {
     ]);
     
     const deposit = await publicClient.readContract({
-      address: ENTRY_POINT as `0x${string}`,
+      address: entryPointAddress,
       abi: entryPointAbi,
       functionName: "balanceOf",
-      args: [KERNEL as `0x${string}`],
+      args: [kernelAddress],
     }) as bigint;
     
     console.log(`[Prefund Check] Kernel deposit: ${deposit.toString()} wei`);
@@ -92,7 +101,9 @@ async function checkPrefundSimple(): Promise<PrefundStatus> {
         message: "Sufficient prefund available",
         depositWei: depositStr,
         requiredPrefundWei: requiredStr,
-        shortfallWei: shortfallStr
+        shortfallWei: shortfallStr,
+        kernelAddress,
+        entryPointAddress,
       };
     } else {
       return { 
@@ -100,7 +111,9 @@ async function checkPrefundSimple(): Promise<PrefundStatus> {
         message: `Insufficient prefund: Account has ${depositStr} wei but needs at least ${requiredStr} wei deposited in EntryPoint. Shortfall: ${shortfallStr} wei`,
         depositWei: depositStr,
         requiredPrefundWei: requiredStr,
-        shortfallWei: shortfallStr
+        shortfallWei: shortfallStr,
+        kernelAddress,
+        entryPointAddress,
       };
     }
   } catch (error: any) {
@@ -110,7 +123,9 @@ async function checkPrefundSimple(): Promise<PrefundStatus> {
       message: `Prefund check failed: ${error.message}`,
       depositWei: '0',
       requiredPrefundWei: '0',
-      shortfallWei: '0'
+      shortfallWei: '0',
+      kernelAddress: KERNEL_ADDRESS,
+      entryPointAddress: ENTRY_POINT_ADDRESS,
     };
   }
 }
@@ -240,7 +255,7 @@ router.post("/userOp/broadcast", async (req: Request, res: Response) => {
     }
 
     // Отправляем в сеть
-    const txHash = await sendUserOpV07(unpacked as UnpackedUserOperationV07);
+    const { txHash } = await sendUserOpV07(unpacked as UnpackedUserOperationV07);
 
     console.log('[userOp/broadcast] -> txHash:', txHash);
 
@@ -294,7 +309,9 @@ router.get("/prefund/check", async (_req: Request, res: Response) => {
         message: result.message,
         depositWei: result.depositWei,
         requiredPrefundWei: result.requiredPrefundWei,
-        shortfallWei: result.shortfallWei
+        shortfallWei: result.shortfallWei,
+        kernelAddress: result.kernelAddress,
+        entryPointAddress: result.entryPointAddress
       });
     } else {
       return res.status(400).json({
@@ -303,7 +320,9 @@ router.get("/prefund/check", async (_req: Request, res: Response) => {
         message: result.message,
         depositWei: result.depositWei,
         requiredPrefundWei: result.requiredPrefundWei,
-        shortfallWei: result.shortfallWei
+        shortfallWei: result.shortfallWei,
+        kernelAddress: result.kernelAddress,
+        entryPointAddress: result.entryPointAddress
       });
     }
   } catch (err: any) {
@@ -315,7 +334,9 @@ router.get("/prefund/check", async (_req: Request, res: Response) => {
       details: err?.message ?? "internal error",
       depositWei: '0',
       requiredPrefundWei: '0',
-      shortfallWei: '0'
+      shortfallWei: '0',
+      kernelAddress: KERNEL_ADDRESS,
+      entryPointAddress: ENTRY_POINT_ADDRESS
     });
   }
 });
@@ -335,7 +356,9 @@ router.get("/entrypoint/status", async (_req: Request, res: Response) => {
       error: err?.message ?? "internal error",
       depositWei: '0',
       requiredPrefundWei: '0',
-      shortfallWei: '0'
+      shortfallWei: '0',
+      kernelAddress: KERNEL_ADDRESS,
+      entryPointAddress: ENTRY_POINT_ADDRESS
     });
   }
 });
@@ -887,31 +910,45 @@ router.post("/entrypoint/deposit", async (req: Request, res: Response) => {
         success: false,
         error: "Failed to build deposit UserOp",
         message: buildError?.message ?? "UserOp build error",
-        details: buildError?.stack
+        details: buildError?.stack,
+        kernelAddress: KERNEL_ADDRESS,
+        entryPointAddress: ENTRY_POINT_ADDRESS
       });
     }
     
     console.log('[entrypoint/deposit] -> Sending UserOp to bundler...');
     
     // Add more detailed error handling for sendUserOpV07
-    let txHash;
+    let sendResult: SendUserOpResult;
     try {
-      txHash = await sendUserOpV07(depositUserOp.unpacked);
-      console.log('[entrypoint/deposit] -> Deposit submitted. TxHash:', txHash);
+      sendResult = await sendUserOpV07(depositUserOp.unpacked);
+      console.log('[entrypoint/deposit] -> Deposit submitted. TxHash:', sendResult.txHash);
     } catch (sendError: any) {
       console.error('[entrypoint/deposit] -> Error sending UserOp:', sendError);
+      const result = sendError?.result;
       return res.status(500).json({
         success: false,
         error: "Failed to send UserOp to bundler",
         message: sendError?.message ?? "UserOp send error",
-        details: sendError?.stack
+        details: sendError?.stack,
+        kernelAddress: KERNEL_ADDRESS,
+        entryPointAddress: ENTRY_POINT_ADDRESS,
+        txHash: result?.txHash,
+        userOpHash: result?.userOpHash,
+        gasUsed: result?.gasUsed,
+        revertReason: result?.revertReason
       });
     }
     
     return res.json({
       success: true,
-      txHash,
+      txHash: sendResult.txHash,
+      userOpHash: sendResult.userOpHash,
+      gasUsed: sendResult.gasUsed,
       message: `Deposited ${amountStr} ETH to EntryPoint`,
+      kernelAddress: KERNEL_ADDRESS,
+      entryPointAddress: ENTRY_POINT_ADDRESS,
+      amountWei: amountWei.toString()
     });
   } catch (err: any) {
     console.error("[/entrypoint/deposit] error:", err);
@@ -920,7 +957,9 @@ router.post("/entrypoint/deposit", async (req: Request, res: Response) => {
       success: false,
       error: "Failed to deposit to EntryPoint",
       message: err?.message ?? "internal error",
-      details: err?.stack
+      details: err?.stack,
+      kernelAddress: KERNEL_ADDRESS,
+      entryPointAddress: ENTRY_POINT_ADDRESS
     });
   }
 });
@@ -1061,7 +1100,7 @@ router.post("/delegated/install-callpolicy", async (req: Request, res: Response)
     );
     
     console.log('[delegated/install-callpolicy] -> Sending user operation...');
-    const txHash = await sendUserOpV07(installUO);
+    const { txHash } = await sendUserOpV07(installUO);
     
     console.log('[delegated/install-callpolicy] -> Success! permissionId:', permissionId, 'vId:', vId, 'txHash:', txHash);
     
@@ -1114,7 +1153,7 @@ router.post("/delegated/install", async (req: Request, res: Response) => {
     const { unpacked: installUO, permissionId, vId } = await buildInstallPermissionUO(delegatedEOA as `0x${string}`);
     
     console.log('[delegated/install] -> Sending user operation...');
-    const txHash = await sendUserOpV07(installUO);
+    const { txHash } = await sendUserOpV07(installUO);
     
     console.log('[delegated/install] -> Success! permissionId:', permissionId, 'vId:', vId, 'txHash:', txHash);
     
@@ -1176,7 +1215,7 @@ router.post("/delegated/enable", async (req: Request, res: Response) => {
     );
     
     console.log('[delegated/enable] -> Sending user operation...');
-    const txHash = await sendUserOpV07(enableUO);
+    const { txHash } = await sendUserOpV07(enableUO);
     
     console.log('[delegated/enable] -> Success! txHash:', txHash);
     
@@ -1215,7 +1254,7 @@ router.post("/delegated/grant", async (req: Request, res: Response) => {
     const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
     
     console.log('[delegated/grant] -> Sending user operation...');
-    const txHash = await sendUserOpV07(grantUO);
+    const { txHash } = await sendUserOpV07(grantUO);
     
     console.log('[delegated/grant] -> Success! txHash:', txHash);
     
@@ -1264,7 +1303,7 @@ router.post("/delegated/uninstall", async (req: Request, res: Response) => {
     const { unpacked: uninstallUO, permissionId, vId } = await buildUninstallPermissionUO(delegatedEOA as `0x${string}`);
     
     console.log('[delegated/uninstall] -> Sending user operation...');
-    const txHash = await sendUserOpV07(uninstallUO);
+    const { txHash } = await sendUserOpV07(uninstallUO);
     
     console.log('[delegated/uninstall] -> Success! permissionId:', permissionId, 'vId:', vId, 'txHash:', txHash);
     
@@ -1478,7 +1517,7 @@ async function performDelegatedKeyInstallation(
         delegatedEOA as `0x${string}`, 
         callPolicyPermissions
       );
-      installTxHash = await sendUserOpV07(installUO);
+      ({ txHash: installTxHash } = await sendUserOpV07(installUO));
       permissionId = permId;
       vId = vid;
       
@@ -1498,7 +1537,7 @@ async function performDelegatedKeyInstallation(
         progress: 25,
       });
       
-      installTxHash = await sendUserOpV07(installUO);
+      ({ txHash: installTxHash } = await sendUserOpV07(installUO));
       permissionId = permId;
       vId = vid;
       
@@ -1548,7 +1587,7 @@ async function performDelegatedKeyInstallation(
       // For sudo: just grant access
       const rootNonceBeforeGrant = await getRootCurrentNonce();
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
-      grantTxHash = await sendUserOpV07(grantUO);
+      ({ txHash: grantTxHash } = await sendUserOpV07(grantUO));
       
       // Verify nonce updated
       const rootNonceAfterGrant = await getRootCurrentNonce();
@@ -1565,7 +1604,7 @@ async function performDelegatedKeyInstallation(
       
       const rootNonceBeforeGrant = await getRootCurrentNonce();
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
-      grantTxHash = await sendUserOpV07(grantUO);
+      ({ txHash: grantTxHash } = await sendUserOpV07(grantUO));
       
       // Verify nonce updated
       const rootNonceAfterGrant = await getRootCurrentNonce();
@@ -1588,7 +1627,7 @@ async function performDelegatedKeyInstallation(
       });
 
       const rootNonceBeforeEnable = await getRootCurrentNonce();
-      const enableTxHash = await sendUserOpV07(enableUO);
+      const { txHash: enableTxHash } = await sendUserOpV07(enableUO);
       console.log(`[Installation ${installationId}] Enable tx:`, enableTxHash);
       
       // Verify enable transaction
@@ -1600,7 +1639,7 @@ async function performDelegatedKeyInstallation(
       // Then grant access
       const rootNonceBeforeGrant = await getRootCurrentNonce();
       const { unpacked: grantUO } = await buildGrantAccessUO(vId as `0x${string}`, '0xe9ae5c53' as `0x${string}`, true);
-      grantTxHash = await sendUserOpV07(grantUO);
+      ({ txHash: grantTxHash } = await sendUserOpV07(grantUO));
       
       // Verify grant transaction
       const rootNonceAfterGrant = await getRootCurrentNonce();
@@ -1823,7 +1862,7 @@ router.post("/revoke", async (req: Request, res: Response) => {
     console.log(`[revoke] -> vId: ${vId}`);
     
     // Send the user operation
-    const txHash = await sendUserOpV07(unpacked);
+    const { txHash } = await sendUserOpV07(unpacked);
     
     console.log(`[revoke] -> Revocation transaction sent: ${txHash}`);
     
@@ -2170,7 +2209,7 @@ router.post("/send", async (req: Request, res: Response) => {
         0
       );
 
-      txHash = await sendUserOpV07(unpacked);
+      ({ txHash } = await sendUserOpV07(unpacked));
     } else {
       // ETH transfer
       const amountInWei = parseEther(amount);
@@ -2185,7 +2224,7 @@ router.post("/send", async (req: Request, res: Response) => {
         0
       );
 
-      txHash = await sendUserOpV07(unpacked);
+      ({ txHash } = await sendUserOpV07(unpacked));
     }
 
     console.log(`[Send] Transaction sent successfully: ${txHash}`);

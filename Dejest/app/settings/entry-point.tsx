@@ -1,13 +1,15 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert, Modal } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { apiClient, PrefundCheckResponse } from '@/utils/apiClient';
 import { formatEther } from 'viem';
-import { getKernelAddress } from '@/utils/config';
+import { getEntryPointAddress, getKernelAddress } from '@/utils/config';
 
-const ENTRY_POINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+const FALLBACK_KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+const FALLBACK_ENTRY_POINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+const ENTRY_POINT_ADDRESS = getEntryPointAddress() || FALLBACK_ENTRY_POINT;
 
 const formatEthValue = (value?: string) => {
   try {
@@ -29,6 +31,20 @@ export default function EntryPointScreen() {
   const [isDepositing, setIsDepositing] = useState(false);
   const [depositAmount, setDepositAmount] = useState('0.01');
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [resultModal, setResultModal] = useState<{
+    visible: boolean;
+    success: boolean;
+    title: string;
+    message: string;
+    txHash?: string;
+    gasUsed?: string;
+    revertReason?: string;
+  }>({
+    visible: false,
+    success: true,
+    title: '',
+    message: '',
+  });
 
   const loadStatus = useCallback(async () => {
     try {
@@ -61,6 +77,26 @@ export default function EntryPointScreen() {
     }
   };
 
+  const closeResultModal = () => {
+    setResultModal(prev => ({ ...prev, visible: false }));
+  };
+  
+  const showResultModal = (params: {
+    success: boolean;
+    title: string;
+    message: string;
+    txHash?: string;
+    gasUsed?: string;
+    revertReason?: string;
+  }) => {
+    setResultModal({
+      visible: true,
+      ...params,
+    });
+  };
+  
+  const formatHash = (hash?: string) => hash ?? '';
+
   const handleDeposit = async () => {
     const numericAmount = parseFloat(depositAmount);
     if (Number.isNaN(numericAmount) || numericAmount <= 0) {
@@ -70,33 +106,56 @@ export default function EntryPointScreen() {
 
     try {
       setIsDepositing(true);
+      closeResultModal();
       console.log('[EntryPoint] Attempting deposit of', depositAmount, 'ETH');
       const response = await apiClient.depositToEntryPoint(depositAmount);
       console.log('[EntryPoint] Deposit response:', response);
       
       if (response.success) {
-        Alert.alert('Deposit Submitted', response.message || 'Deposit transaction sent.');
+        showResultModal({
+          success: true,
+          title: 'Deposit Confirmed',
+          message: response.message || 'Deposit transaction sent.',
+          txHash: response.txHash,
+          gasUsed: response.gasUsed,
+        });
         await loadStatus();
       } else {
-        Alert.alert('Deposit Failed', response.message || 'Unable to deposit to EntryPoint.');
+        showResultModal({
+          success: false,
+          title: 'Deposit Failed',
+          message: response.message || response.error || 'Unable to deposit to EntryPoint.',
+          txHash: response.txHash,
+          gasUsed: response.gasUsed,
+          revertReason: response.revertReason || response.error,
+        });
       }
     } catch (error: any) {
       console.error('[EntryPoint] Deposit failed:', error);
       console.error('[EntryPoint] Error details:', error?.response?.data || error?.message);
       
-      // Show more detailed error information
-      const errorMessage = error?.response?.data?.message || 
-                          error?.response?.data?.error || 
+      const backendData = error?.response?.data;
+      const errorMessage = backendData?.message || 
+                          backendData?.error || 
                           error?.message || 
                           'Unable to deposit to EntryPoint.';
       
-      Alert.alert('Deposit Failed', errorMessage);
+      showResultModal({
+        success: false,
+        title: 'Deposit Failed',
+        message: errorMessage,
+        txHash: backendData?.txHash,
+        gasUsed: backendData?.gasUsed,
+        revertReason: backendData?.revertReason,
+      });
     } finally {
       setIsDepositing(false);
     }
   };
 
-  const kernelAddress = getKernelAddress() || '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+  const configuredKernel = getKernelAddress() || FALLBACK_KERNEL;
+  const kernelAddress = status?.kernelAddress ?? configuredKernel;
+  const entryPointAddress = status?.entryPointAddress ?? ENTRY_POINT_ADDRESS;
   const shortfallExists = status?.shortfallWei && status.shortfallWei !== '0';
 
   return (
@@ -187,7 +246,7 @@ export default function EntryPointScreen() {
           </View>
           <View style={styles.addressRow}>
             <Text style={styles.addressLabel}>EntryPoint (v0.7)</Text>
-            <Text style={styles.addressValue}>{ENTRY_POINT_ADDRESS}</Text>
+            <Text style={styles.addressValue}>{entryPointAddress}</Text>
           </View>
         </View>
 
@@ -234,6 +293,51 @@ export default function EntryPointScreen() {
           </Text>
         </View>
       </ScrollView>
+      <Modal
+        transparent
+        visible={resultModal.visible}
+        animationType="fade"
+        onRequestClose={closeResultModal}
+      >
+        <View style={styles.resultModalOverlay}>
+          <View style={[
+            styles.resultModalCard,
+            resultModal.success ? styles.resultModalSuccess : styles.resultModalError
+          ]}>
+            <IconSymbol
+              name={resultModal.success ? 'checkmark.circle.fill' : 'xmark.octagon.fill'}
+              size={32}
+              color={resultModal.success ? '#10B981' : '#F87171'}
+            />
+            <Text style={styles.resultModalTitle}>{resultModal.title}</Text>
+            <Text style={styles.resultModalMessage}>{resultModal.message}</Text>
+            
+            {resultModal.txHash && (
+              <View style={styles.resultModalDetail}>
+                <Text style={styles.resultModalDetailLabel}>Transaction</Text>
+                <Text style={styles.resultModalDetailValue}>{formatHash(resultModal.txHash)}</Text>
+              </View>
+            )}
+            
+            {resultModal.gasUsed && (
+              <View style={styles.resultModalDetail}>
+                <Text style={styles.resultModalDetailLabel}>Gas Used</Text>
+                <Text style={styles.resultModalDetailValue}>{resultModal.gasUsed}</Text>
+              </View>
+            )}
+            
+            {!resultModal.success && resultModal.revertReason && (
+              <Text style={styles.resultModalErrorReason} numberOfLines={3}>
+                {resultModal.revertReason}
+              </Text>
+            )}
+            
+            <TouchableOpacity style={styles.resultModalButton} onPress={closeResultModal}>
+              <Text style={styles.resultModalButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -468,5 +572,74 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
+  resultModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  resultModalCard: {
+    width: '100%',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    gap: 12,
+  },
+  resultModalSuccess: {
+    backgroundColor: '#12211b',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  resultModalError: {
+    backgroundColor: '#261519',
+    borderWidth: 1,
+    borderColor: 'rgba(248, 113, 113, 0.3)',
+  },
+  resultModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  resultModalMessage: {
+    color: '#E5E5E5',
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  resultModalDetail: {
+    width: '100%',
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  resultModalDetailLabel: {
+    color: '#A0A0A0',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  resultModalDetailValue: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontFamily: 'Menlo',
+    marginTop: 4,
+  },
+  resultModalErrorReason: {
+    color: '#FCA5A5',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  resultModalButton: {
+    marginTop: 8,
+    backgroundColor: '#8B5CF6',
+    borderRadius: 999,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+  },
+  resultModalButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 15,
+  },
 });
-
