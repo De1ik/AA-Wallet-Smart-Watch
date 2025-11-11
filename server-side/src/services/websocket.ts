@@ -88,26 +88,21 @@ export class WebSocketService {
   }
 
   // Broadcast status update to all clients
-  broadcastToAll(status: InstallationStatus) {
-    const message = JSON.stringify({
-      type: 'status_update',
-      ...status
-    });
+  // broadcastToAll(status: InstallationStatus) {
+  //   const message = JSON.stringify({
+  //     type: 'status_update',
+  //     ...status
+  //   });
 
-    this.clients.forEach((ws, clientId) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(message);
-      } else {
-        // Remove disconnected clients
-        this.clients.delete(clientId);
-      }
-    });
-  }
-
-  // Get number of connected clients
-  getClientCount(): number {
-    return this.clients.size;
-  }
+  //   this.clients.forEach((ws, clientId) => {
+  //     if (ws.readyState === WebSocket.OPEN) {
+  //       ws.send(message);
+  //     } else {
+  //       // Remove disconnected clients
+  //       this.clients.delete(clientId);
+  //     }
+  //   });
+  // }
 
   // Start heartbeat to detect dead connections
   private startHeartbeat() {

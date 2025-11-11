@@ -34,9 +34,7 @@ export type EtherscanTransaction = {
   tokenType?: 'ETH' | 'ERC20' | 'ERC721' | 'ERC1155';
 };
 
-/**
- * Get Etherscan configuration for a given chain
- */
+// Get Etherscan configuration for a given chain
 function getEtherscanConfig(chain: string): NetworkConfig {
   switch (chain.toLowerCase()) {
     case 'mainnet':
@@ -52,9 +50,7 @@ function getEtherscanConfig(chain: string): NetworkConfig {
   }
 }
 
-/**
- * Extract transactions from API response
- */
+// Extract transactions from API response (different endpoints have different structures)
 function extractTransactions(response: RawApiResponse): any[] {
   if (!response) return [];
   const { result } = response;
@@ -67,9 +63,8 @@ function extractTransactions(response: RawApiResponse): any[] {
   return [];
 }
 
-/**
- * Build URL with query parameters
- */
+
+// Build URL with query parameters
 function buildUrl(baseUrl: string, params: Record<string, string | undefined>): string {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -80,19 +75,18 @@ function buildUrl(baseUrl: string, params: Record<string, string | undefined>): 
   return `${baseUrl}?${search.toString()}`;
 }
 
-/**
- * Call Etherscan API and parse response
- */
+
+// Call Etherscan API and parse response in parallel
 async function callEtherscan(url: string, label: string): Promise<any[]> {
   const apiKey = process.env.ETHERSCAN_API_KEY || '';
   const maskedUrl = url.replace(apiKey, '***');
   
-  console.log(`🔗 [Etherscan] ${label} URL:`, maskedUrl);
+  console.log(`[Etherscan] ${label} URL:`, maskedUrl);
   
   const response = await fetch(url);
   
   if (!response.ok) {
-    console.error(`❌ [Etherscan] ${label} API error: ${response.status} ${response.statusText}`);
+    console.error(`[Etherscan] ${label} API error: ${response.status} ${response.statusText}`);
     throw new Error(`Etherscan API error: ${response.status} ${response.statusText}`);
   }
   
@@ -103,15 +97,15 @@ async function callEtherscan(url: string, label: string): Promise<any[]> {
     const parsed = JSON.parse(body) as RawApiResponse;
     data = parsed;
   } catch (err) {
-    console.error(`❌ [Etherscan] ${label} API returned non-JSON payload:`, body.slice(0, 200));
+    console.error(`[Etherscan] ${label} API returned non-JSON payload:`, body.slice(0, 200));
     throw err;
   }
   
-  console.log(`📥 [Etherscan] ${label} API status: ${data.status} | message: ${data.message || 'OK'}`);
+  console.log(`[Etherscan] ${label} API status: ${data.status} | message: ${data.message || 'OK'}`);
   
   if (data.status && data.status !== '1') {
     const errorMsg = data.message || data.result || 'Unknown error';
-    console.error(`❌ [Etherscan] ${label} API error:`, errorMsg);
+    console.error(`[Etherscan] ${label} API error:`, errorMsg);
     
     // Handle "No transactions found" as a valid case
     if (errorMsg.includes('No transactions') || errorMsg.includes('No record found')) {
@@ -119,7 +113,7 @@ async function callEtherscan(url: string, label: string): Promise<any[]> {
     }
     
     if (typeof data.result === 'string') {
-      console.error('❌ [Etherscan] Error details:', data.result);
+      console.error(`[Etherscan] ${label} Error details:`, data.result);
     }
     
     // Don't throw for empty results, return empty array instead
@@ -129,7 +123,7 @@ async function callEtherscan(url: string, label: string): Promise<any[]> {
   }
   
   const txs = extractTransactions(data);
-  console.log(`📊 [Etherscan] ${label} transactions found: ${txs.length}`);
+  console.log(`[Etherscan] ${label} transactions found: ${txs.length}`);
   
   return txs;
 }
@@ -150,16 +144,16 @@ export async function fetchEtherscanTransactions(
   const apiKey = process.env.ETHERSCAN_API_KEY;
 
   if (!apiKey) {
-    console.warn('⚠️ [Etherscan] ETHERSCAN_API_KEY not found in environment variables');
+    console.warn('[Etherscan] ETHERSCAN_API_KEY not found in environment variables');
     throw new Error('ETHERSCAN_API_KEY is required in environment variables');
   }
 
-  console.log(`📡 [Etherscan] Fetching transactions for ${address} on ${chain}...`);
+  console.log(`[Etherscan] Fetching transactions for ${address} on ${chain}...`);
 
   // Fetch more transactions to allow for filtering and deduplication across all types
   const fetchLimit = Math.max(limit * 3, 1000);
 
-  // --- 1️⃣ External ETH transactions
+  // 1. External ETH transactions
   const externalUrl = buildUrl(baseUrl, {
     module: 'account',
     action: 'txlist',
@@ -173,7 +167,7 @@ export async function fetchEtherscanTransactions(
     apikey: apiKey,
   });
 
-  // --- 2️⃣ Internal transactions
+  // 2. Internal transactions
   const internalUrl = buildUrl(baseUrl, {
     module: 'account',
     action: 'txlistinternal',
@@ -187,7 +181,7 @@ export async function fetchEtherscanTransactions(
     apikey: apiKey,
   });
 
-  // --- 3️⃣ ERC-20 Token transfers
+  // 3. ERC-20 Token transfers
   const erc20Url = buildUrl(baseUrl, {
     module: 'account',
     action: 'tokentx',
@@ -201,7 +195,7 @@ export async function fetchEtherscanTransactions(
     apikey: apiKey,
   });
 
-  // --- 4️⃣ ERC-721 NFT transfers
+  // 4. ERC-721 NFT transfers
   const erc721Url = buildUrl(baseUrl, {
     module: 'account',
     action: 'tokennfttx',
@@ -215,7 +209,7 @@ export async function fetchEtherscanTransactions(
     apikey: apiKey,
   });
 
-  // --- 範5️⃣ ERC-1155 NFT transfers
+  // 5. ERC-1155 NFT transfers
   const erc1155Url = buildUrl(baseUrl, {
     module: 'account',
     action: 'token1155tx',
@@ -229,7 +223,7 @@ export async function fetchEtherscanTransactions(
     apikey: apiKey,
   });
 
-  // Fetch all transaction types in parallel for efficiency
+  // Fetch all transaction types in parallel
   const [externalTxs, internalTxs, erc20Txs, erc721Txs, erc1155Txs] = await Promise.all([
     callEtherscan(externalUrl, 'External'),
     callEtherscan(internalUrl, 'Internal'),
@@ -238,9 +232,9 @@ export async function fetchEtherscanTransactions(
     callEtherscan(erc1155Url, 'ERC-1155'),
   ]);
 
-  console.log(`✅ [Etherscan] External: ${externalTxs.length} | Internal: ${internalTxs.length} | ERC-20: ${erc20Txs.length} | ERC-721: ${erc721Txs.length} | ERC-1155: ${erc1155Txs.length}`);
+  console.log(`[Etherscan] External: ${externalTxs.length} | Internal: ${internalTxs.length} | ERC-20: ${erc20Txs.length} | ERC-721: ${erc721Txs.length} | ERC-1155: ${erc1155Txs.length}`);
 
-  // --- 6️⃣ Process ETH transactions (external + internal)
+  // 6. Process ETH transactions (external + internal)
   const ethTxs = [...externalTxs, ...internalTxs].map((tx: any) => {
     const timeNum = Number(tx.timeStamp);
     const timestamp =
@@ -274,7 +268,7 @@ export async function fetchEtherscanTransactions(
     };
   });
 
-  // --- 7️⃣ Process ERC-20 token transfers
+  // 7. Process ERC-20 token transfers
   const erc20Processed = erc20Txs.map((tx: any) => {
     const timeNum = Number(tx.timeStamp);
     const timestamp = !isNaN(timeNum) && timeNum > 0
@@ -303,7 +297,7 @@ export async function fetchEtherscanTransactions(
     };
   });
 
-  // --- 8️⃣ Process ERC-721 NFT transfers
+  // 8. Process ERC-721 NFT transfers
   const erc721Processed = erc721Txs.map((tx: any) => {
     const timeNum = Number(tx.timeStamp);
     const timestamp = !isNaN(timeNum) && timeNum > 0
@@ -329,7 +323,7 @@ export async function fetchEtherscanTransactions(
     };
   });
 
-  // --- 9️⃣ Process ERC-1155 NFT transfers
+  // 9. Process ERC-1155 NFT transfers
   const erc1155Processed = erc1155Txs.map((tx: any) => {
     const timeNum = Number(tx.timeStamp);
     const timestamp = !isNaN(timeNum) && timeNum > 0
@@ -357,10 +351,10 @@ export async function fetchEtherscanTransactions(
     };
   });
 
-  // --- 🔟 Combine all transaction types
+  // 10. Combine all transaction types
   const all = [...ethTxs, ...erc20Processed, ...erc721Processed, ...erc1155Processed];
 
-  // --- 1️⃣1️⃣ Remove duplicates and sort
+  // 11. Remove duplicates and sort
   // Create unique keys by combining hash, from, to, tokenType, tokenAddress, tokenId for better deduplication
   const seenKeys = new Set<string>();
   const unique = all.filter((tx) => {
@@ -383,7 +377,7 @@ export async function fetchEtherscanTransactions(
   // Limit results
   const limited = sorted.slice(0, limit);
 
-  console.log(`📊 [Etherscan] Final transaction count: ${limited.length}`);
+  console.log(`[Etherscan] Final transaction count: ${limited.length}`);
   
   return limited;
 }
