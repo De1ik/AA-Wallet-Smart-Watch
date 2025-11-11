@@ -27,10 +27,13 @@ import {
   getCurrentDay,
   buildUpdatePermissionLimitsUO,
   fetchAllTokenBalances,
-  fetchTransactionHistory
+  fetchTransactionHistory,
+  UserOpExecutionError,
 } from "../utils/native-code";
 import { fetchEtherscanTransactions, EtherscanTransaction } from "../utils/etherscanHistory";
-import { parseEther } from 'viem';
+import { parseEther, createPublicClient, http } from 'viem';
+import type { Address } from 'viem';
+import { sepolia } from 'viem/chains';
 import { InstallationStatus } from "../services/websocket";
 import { wsService } from "../index";
 
@@ -41,6 +44,8 @@ const DEFAULT_ENTRY_POINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032'
 
 const KERNEL_ADDRESS = (process.env.KERNEL ?? DEFAULT_KERNEL_ADDRESS) as `0x${string}`;
 const ENTRY_POINT_ADDRESS = (process.env.ENTRY_POINT ?? DEFAULT_ENTRY_POINT_ADDRESS) as `0x${string}`;
+const ETH_RPC_URL = process.env.ETH_RPC_URL ?? 'https://sepolia.infura.io/v3/7df085afafad4becaad36c48fb162932';
+const sepoliaClient = createPublicClient({ chain: sepolia, transport: http(ETH_RPC_URL) });
 
 // Helper function to check prefund status directly
 interface PrefundStatus {
@@ -212,6 +217,9 @@ router.post("/userOp/prepare", async (req: Request, res: Response) => {
  * }
  */
 router.post("/userOp/broadcast", async (req: Request, res: Response) => {
+  let amtWei: bigint | null = null;
+  let normalizedKernelAddress: Address | null = null;
+  
   try {
 
     console.log('[userOp/broadcast] -> req.body:', req.body);
@@ -235,8 +243,23 @@ router.post("/userOp/broadcast", async (req: Request, res: Response) => {
     if (!signature || typeof signature !== "string" || !signature.startsWith("0x")) {
       return res.status(400).json({ error: "signature is required (0x-hex)" });
     }
-    const amtWei = BigInt(amountWei.toString());
+    amtWei = BigInt(amountWei.toString());
     const callData = (typeof data === "string" && data.startsWith("0x")) ? data : "0x";
+    normalizedKernelAddress = (kernelAddress as Address) ?? KERNEL_ADDRESS;
+
+    // Quick balance guard so we can surface a friendly error before hitting the bundler
+    if (normalizedKernelAddress && amtWei > 0n) {
+      const { ok, availableWei } = await ensureSufficientNativeBalance(normalizedKernelAddress, amtWei);
+      if (!ok) {
+        return res.status(400).json({
+          error: "Insufficient balance for this transaction.",
+          details: {
+            requestedWei: amtWei.toString(),
+            availableWei: availableWei.toString()
+          }
+        });
+      }
+    }
 
     // На втором шаге мы детерминированно восстанавливаем ту же UO…
     const { unpacked, userOpHash } = await buildDelegatedSendUO(
@@ -262,7 +285,8 @@ router.post("/userOp/broadcast", async (req: Request, res: Response) => {
     return res.json({ txHash });
   } catch (err: any) {
     console.error("[/userOp/broadcast] error:", err);
-    return res.status(500).json({ error: err?.message ?? "internal error" });
+    const { status, body } = await buildBroadcastErrorResponse(err, normalizedKernelAddress, amtWei);
+    return res.status(status).json(body);
   }
 });
 
@@ -2247,3 +2271,86 @@ router.post("/send", async (req: Request, res: Response) => {
 });
 
 export default router;
+
+async function ensureSufficientNativeBalance(address: Address, requiredWei: bigint): Promise<{
+  ok: boolean;
+  availableWei: bigint;
+}> {
+  try {
+    const balance = await sepoliaClient.getBalance({ address });
+    return {
+      ok: balance >= requiredWei,
+      availableWei: balance,
+    };
+  } catch (error) {
+    console.warn('[userOp/broadcast] Failed to read ETH balance for check:', error);
+    return {
+      ok: true,
+      availableWei: 0n,
+    };
+  }
+}
+
+function interpretFriendlyError(reason?: string): string | null {
+  if (!reason) return null;
+  const normalized = reason.toLowerCase();
+  if (normalized.includes('insufficient')) {
+    return 'Insufficient balance for this transaction.';
+  }
+  if (normalized.includes('permission')) {
+    return 'Permission is not granted for this account. Approve it in the mobile app.';
+  }
+  if (normalized.includes('limit')) {
+    return 'Spending limit has been exceeded.';
+  }
+  if (normalized.includes('rule')) {
+    return 'Defined policy rules were violated for this transaction.';
+  }
+  return null;
+}
+
+async function buildBroadcastErrorResponse(
+  err: any,
+  kernelAddress: Address | null,
+  amountWei: bigint | null
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const reason =
+    err?.result?.revertReason ||
+    err?.error?.message ||
+    err?.message;
+  const friendly = interpretFriendlyError(reason);
+  if (friendly) {
+    return { status: 400, body: { error: friendly } };
+  }
+
+  if (kernelAddress && amountWei && amountWei > 0n) {
+    const balanceCheck = await ensureSufficientNativeBalance(kernelAddress, amountWei);
+    if (!balanceCheck.ok) {
+      return {
+        status: 400,
+        body: {
+          error: 'Insufficient balance for this transaction.',
+          details: {
+            requestedWei: amountWei.toString(),
+            availableWei: balanceCheck.availableWei.toString(),
+          },
+        },
+      };
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    error: err?.message ?? 'internal error',
+  };
+
+  if (err instanceof UserOpExecutionError && err.result) {
+    body.txHash = err.result.txHash;
+    body.userOpHash = err.result.userOpHash;
+    body.success = err.result.success;
+  }
+
+  return {
+    status: 500,
+    body,
+  };
+}

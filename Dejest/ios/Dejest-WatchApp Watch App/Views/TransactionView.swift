@@ -207,9 +207,9 @@ struct TransactionView: View {
                     .foregroundColor(.white)
                     .multilineTextAlignment(.leading)
                 
-                Text("Fix the issue in the mobile app and try again.")
-                    .font(.caption2)
-                    .foregroundColor(.gray)
+                // Text("Fix the issue in the mobile app and try again.")
+                //     .font(.caption2)
+                //     .foregroundColor(.gray)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
