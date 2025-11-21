@@ -29,6 +29,13 @@ export interface WatchPermissionData {
   deviceName: string;
   keyType: 'restricted' | 'sudo' | 'callpolicy';
   createdAt: string;
+  allowedTokens?: {
+    address: string;
+    symbol: string;
+    decimals: number;
+    maxValuePerTx: string;
+    maxValuePerDay: string;
+  }[];
 }
 
 export interface TargetAddress {
@@ -231,4 +238,3 @@ export function formatWatchError(error: any): string {
   
   return 'An unknown error occurred with the smart watch';
 }
-

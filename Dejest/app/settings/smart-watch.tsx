@@ -1179,9 +1179,13 @@ export default function SmartWatchScreen() {
                               actionDescription = 'Withdraw tokens from contracts';
                             }
 
-                            const valueLimitEth = parseFloat(permission.valueLimit) / 1e18;
-                            const dailyLimitEth = parseFloat(permission.dailyLimit) / 1e18;
-                            const dailyUsageEth = permission.dailyUsage ? parseFloat(permission.dailyUsage) / 1e18 : 0;
+                            const decimals = permission.decimals ?? 18;
+                            const unitLabel = permission.selector === '0x00000000' ? 'ETH' : permission.selector === '0xa9059cbb' ? (permission.tokenSymbol ?? 'TOKEN') : 'units';
+                            const valueLimitDisplay = `${permission.valueLimit} ${unitLabel} (decimals: ${decimals})`;
+                            const dailyLimitDisplay = `${permission.dailyLimit} ${unitLabel} (decimals: ${decimals})`;
+                            const dailyUsageDisplay = permission.dailyUsage
+                              ? `${permission.dailyUsage} ${unitLabel} (decimals: ${decimals})`
+                              : null;
                             const callTypeText = permission.callType === 0 ? 'Single Call' : 'Delegate Call';
                             
                             return (
@@ -1209,23 +1213,22 @@ export default function SmartWatchScreen() {
                                   
                                   <View style={styles.permissionDetailRow}>
                                     <Text style={styles.permissionDetailLabel}>Max Value per Transaction:</Text>
-                                    <Text style={styles.permissionDetailValue}>{valueLimitEth} ETH</Text>
+                                    <Text style={styles.permissionDetailValue}>{valueLimitDisplay}</Text>
                                   </View>
                                   
                                   <View style={styles.permissionDetailRow}>
                                     <Text style={styles.permissionDetailLabel}>Max Value per Day:</Text>
-                                    <Text style={styles.permissionDetailValue}>{dailyLimitEth} ETH</Text>
+                                    <Text style={styles.permissionDetailValue}>{dailyLimitDisplay}</Text>
                                   </View>
                                   
-                                  {permission.dailyUsage && (
+                                  {dailyUsageDisplay && (
                                     <View style={styles.permissionDetailRow}>
                                       <Text style={styles.permissionDetailLabel}>Today's Usage:</Text>
                                       <Text style={[
                                         styles.permissionDetailValue,
-                                        dailyUsageEth >= dailyLimitEth ? styles.usageExceeded : styles.usageNormal
+                                        styles.usageNormal
                                       ]}>
-                                        {dailyUsageEth} ETH
-                                        {dailyUsageEth >= dailyLimitEth && ' (LIMIT EXCEEDED)'}
+                                        {dailyUsageDisplay}
                                       </Text>
                                     </View>
                                   )}
@@ -1280,7 +1283,7 @@ export default function SmartWatchScreen() {
                         <View style={styles.summaryItem}>
                           <Text style={styles.summaryLabel}>Max Transaction Value</Text>
                           <Text style={styles.summaryValue}>
-                            {Math.max(...selectedDeviceForRestrictions.callPolicyPermissions.map(p => parseFloat(p.valueLimit) / 1e18))} ETH
+                            {Math.max(...selectedDeviceForRestrictions.callPolicyPermissions.map(p => parseFloat(p.valueLimit) || 0))} (per action unit)
                           </Text>
                         </View>
                       </View>

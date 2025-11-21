@@ -15,22 +15,31 @@ class UserOpManager {
         let wei = eth * pow(10.0, 18.0)
         return String(format: "%.0f", wei)
     }
+    
+    func amountToUnits(_ amount: Double, decimals: Int) -> String {
+        let factor = pow(10.0, Double(decimals))
+        let units = amount * factor
+        return String(format: "%.0f", units)
+    }
   
     // MARK: - Step 1: Отправляем на сервер данные (from, to, amount)
-    func requestUnsignedUserOp(kernelAddress: String, from: String, to: String, amountInWei: String, completion: @escaping (Result<PrepareUserOpResponse, Error>) -> Void) {
+    func requestUnsignedUserOp(kernelAddress: String, from: String, to: String, amountInWei: String, tokenAddress: String?, completion: @escaping (Result<PrepareUserOpResponse, Error>) -> Void) {
         let url = URL(string: "\(backendURL)/userOp/prepare")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "delegatedEOA": from,
             "to": to,
             "amountWei": amountInWei,
             "data": "0x",
             "kernelAddress": kernelAddress
         ]
+        if let token = tokenAddress, !token.isEmpty {
+            body["tokenAddress"] = token
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         print("📤 Sending request to backend:", url)
@@ -101,13 +110,13 @@ class UserOpManager {
     }
     
     // MARK: - Step 3: Отправляем подписанный userOpHash на сервер
-    func sendSignedUserOp(kernelAddress: String, from: String, to: String, amountInWei: String, userOpHash: String, signature: String, completion: @escaping (Result<String, Error>) -> Void) {
+    func sendSignedUserOp(kernelAddress: String, from: String, to: String, amountInWei: String, tokenAddress: String?, userOpHash: String, signature: String, completion: @escaping (Result<String, Error>) -> Void) {
         let url = URL(string: "\(backendURL)/userOp/broadcast")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "delegatedEOA": from,
             "to": to,
             "amountWei": amountInWei,
@@ -116,6 +125,9 @@ class UserOpManager {
             "opHash": userOpHash,
             "kernelAddress": kernelAddress
         ]
+        if let token = tokenAddress, !token.isEmpty {
+            body["tokenAddress"] = token
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         print("📤 Sending signed UserOp back to backend:", body)
@@ -162,8 +174,8 @@ class UserOpManager {
     }
     
     // MARK: - Full workflow
-  func prepareSignAndSendUserOp(kernelAddress: String, from: String, to: String, amountInWei: String, completion: @escaping (Result<String, Error>) -> Void) {
-    requestUnsignedUserOp(kernelAddress: kernelAddress, from: from, to: to, amountInWei: amountInWei) { result in
+  func prepareSignAndSendUserOp(kernelAddress: String, from: String, to: String, amountInWei: String, tokenAddress: String?, completion: @escaping (Result<String, Error>) -> Void) {
+    requestUnsignedUserOp(kernelAddress: kernelAddress, from: from, to: to, amountInWei: amountInWei, tokenAddress: tokenAddress) { result in
             switch result {
             case .success(let unsignedResponse):
                 self.signUserOpHash(userOpHash: unsignedResponse.userOpHash) { signResult in
@@ -174,6 +186,7 @@ class UserOpManager {
                           from: from,
                           to: to,
                           amountInWei: amountInWei,
+                          tokenAddress: tokenAddress,
                           userOpHash: unsignedResponse.userOpHash,
                           signature: signatureHex,
                           completion: completion

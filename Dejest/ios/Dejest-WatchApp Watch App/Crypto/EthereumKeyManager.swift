@@ -10,6 +10,7 @@ class EthereumKeyManager {
     private let publicKernelTag  = "com.de1ik.wallet.kernel"
     private let allowanceCertTag  = "com.de1ik.wallet.allowancecert"
     private let whitelistTag  = "com.de1ik.wallet.whitelist"
+    private let allowedTokensTag = "com.de1ik.wallet.allowedtokens"
     
     private init() {}
     
@@ -84,6 +85,30 @@ class EthereumKeyManager {
       return whitelist
     } else {
       print("Failed to deserialize whitelist")
+      return nil
+    }
+  }
+  
+  // Save allowed tokens for delegated key
+  func saveAllowedTokens(tokens: [[String: Any]]) {
+    if let jsonData = try? JSONSerialization.data(withJSONObject: tokens, options: []) {
+      UserDefaults.standard.set(jsonData, forKey: allowedTokensTag)
+      print("Allowed tokens saved to UserDefaults")
+    } else {
+      print("Failed to serialize allowed tokens")
+    }
+  }
+  
+  func loadAllowedTokens() -> [[String: Any]]? {
+    guard let jsonData = UserDefaults.standard.data(forKey: allowedTokensTag) else {
+      print("No allowed tokens data found")
+      return nil
+    }
+    
+    if let tokens = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] {
+      return tokens
+    } else {
+      print("Failed to deserialize allowed tokens")
       return nil
     }
   }

@@ -1,4 +1,5 @@
 import type { Request, Response, Router } from "express";
+import { parseUnits } from "viem";
 
 import {
   buildEnableSelectorUO,
@@ -226,21 +227,23 @@ function validateDelegatedEOA(address: unknown): string | null {
 // Helper to convert input permissions to CallPolicyPermission format
 function convertToCallPolicyPermissions(permissions: any[]): CallPolicyPermission[] {
   return permissions.map((perm) => {
-    const ethValue = parseFloat(perm.valueLimit.toString());
-    const weiValue = Math.floor(ethValue * 1e18);
-    const ethDailyValue = parseFloat((perm.dailyLimit || 0).toString());
-    const weiDailyValue = Math.floor(ethDailyValue * 1e18);
+    const decimals = typeof perm.decimals === "number" ? perm.decimals : 18;
+    const toBigIntUnits = (val: any) => {
+      const asString = val?.toString?.() ?? "0";
+      return parseUnits(asString, decimals);
+    };
     return {
       callType: perm.callType,
       target: perm.target as `0x${string}`,
       selector: (perm.selector === "0x" ? "0x00000000" : perm.selector) as `0x${string}`,
-      valueLimit: BigInt(weiValue),
-      dailyLimit: BigInt(weiDailyValue),
+      valueLimit: toBigIntUnits(perm.valueLimit),
+      dailyLimit: toBigIntUnits(perm.dailyLimit ?? 0),
       rules: (perm.rules || []).map((rule: any) => ({
         condition: rule.condition,
         offset: rule.offset,
         params: rule.params || [],
       })),
+      decimals,
     };
   });
 }
@@ -260,6 +263,9 @@ function validateCallPolicyPermissions(permissions: any[]): string | null {
     }
     if (perm.valueLimit === undefined || perm.valueLimit === null) {
       return `permissions[${i}].valueLimit is required and must be a string or number`;
+    }
+    if (perm.decimals !== undefined && typeof perm.decimals !== "number") {
+      return `permissions[${i}].decimals must be a number if provided`;
     }
   }
   return null;
@@ -504,13 +510,21 @@ function logCallPolicySummary(delegatedEOA: string, permissions: CallPolicyPermi
                       : perm.selector === "0x2e1a7d4d"
                         ? "Withdraw"
                         : "Unknown";
-    const ethValue = (Number(perm.valueLimit) / 1e18).toFixed(6);
-    const ethDailyValue = (Number(perm.dailyLimit) / 1e18).toFixed(6);
+    const decimals = perm.decimals ?? 18;
+    const divisor = 10n ** BigInt(decimals);
+    const formatAmount = (val: bigint) => {
+      const whole = val / divisor;
+      const fraction = val % divisor;
+      if (fraction === 0n) return whole.toString();
+      return `${whole}.${fraction.toString().padStart(decimals, "0")}`.replace(/0+$/, "").replace(/\.$/, "");
+    };
+    const formattedValue = formatAmount(perm.valueLimit);
+    const formattedDaily = formatAmount(perm.dailyLimit);
     console.log(`   ${index + 1}. ${actionName}`);
     console.log(`      Target: ${perm.target}`);
     console.log(`      Selector: ${perm.selector}`);
-    console.log(`      Value Limit: ${ethValue} ETH`);
-    console.log(`      Daily Limit: ${ethDailyValue} ETH`);
+    console.log(`      Value Limit: ${formattedValue} (decimals: ${decimals})`);
+    console.log(`      Daily Limit: ${formattedDaily} (decimals: ${decimals})`);
     console.log(`      Rules: ${perm.rules.length > 0 ? JSON.stringify(perm.rules, null, 8) : "None"}`);
     console.log("");
   });

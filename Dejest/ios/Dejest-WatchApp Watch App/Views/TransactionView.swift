@@ -18,6 +18,11 @@ struct TransactionView: View {
     @State private var selectedReceiverIndex: Int = 0
     @State private var showReceiverPicker: Bool = false
     
+    // Token selection
+    @State private var selectedTokenAddress: String = "ETH"
+    @State private var allowedTokens: [[String: Any]] = []
+    @State private var showTokenPicker: Bool = false
+    
     var body: some View {
         ZStack {
             // Background gradient
@@ -185,6 +190,13 @@ struct TransactionView: View {
                 showReceiverPicker = false
             }
         }
+        .sheet(isPresented: $showTokenPicker) {
+            TokenPickerView(
+                tokens: allowedTokensWithEth(),
+                selectedAddress: $selectedTokenAddress,
+                isPresented: $showTokenPicker
+            )
+        }
     }
     
     private struct TransactionErrorBanner: View {
@@ -224,6 +236,47 @@ struct TransactionView: View {
         }
     }
     
+    private struct TokenPickerView: View {
+        let tokens: [[String: Any]]
+        @Binding var selectedAddress: String
+        @Binding var isPresented: Bool
+        
+        var body: some View {
+            NavigationView {
+                List {
+                    ForEach(tokens.indices, id: \.self) { idx in
+                        let token = tokens[idx]
+                        let address = token["address"] as? String ?? ""
+                        let symbol = token["symbol"] as? String ?? "TOKEN"
+                        let name = token["name"] as? String ?? ""
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(symbol).font(.headline)
+                                Text(name).font(.caption).foregroundColor(.gray)
+                                Text(address).font(.caption2).foregroundColor(.gray).lineLimit(1).truncationMode(.middle)
+                            }
+                            Spacer()
+                            if selectedAddress.lowercased() == address.lowercased() {
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                          selectedAddress = address
+                          isPresented = false
+                        }
+                    }
+                }
+                .navigationTitle("Select Token")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { isPresented = false }
+                    }
+                }
+            }
+        }
+    }
+    
     // MARK: - Key Management
     
     private func loadKeys() {
@@ -253,6 +306,8 @@ struct TransactionView: View {
         } else {
             print("No whitelist found")
         }
+        
+        loadAllowedTokens()
     }
     
     private func updateSelectedReceiver(index: Int) {
@@ -274,6 +329,25 @@ struct TransactionView: View {
         return whitelist[index]["address"] as? String ?? ""
     }
     
+    private func loadAllowedTokens() {
+        if let tokens = EthereumKeyManager.shared.loadAllowedTokens() {
+            allowedTokens = tokens
+            print("Loaded allowed tokens: \(tokens.count)")
+        }
+    }
+    
+    private func allowedTokensWithEth() -> [[String: Any]] {
+        var tokens: [[String: Any]] = [["address": "ETH", "symbol": "ETH", "name": "Ethereum", "decimals": 18]]
+        tokens.append(contentsOf: allowedTokens)
+        return tokens
+    }
+    
+    private func displayTokenName(address: String) -> String {
+        if address == "ETH" { return "ETH" }
+        let token = allowedTokens.first { ($0["address"] as? String)?.lowercased() == address.lowercased() }
+        return token?["symbol"] as? String ?? "Token"
+    }
+    
     // MARK: - Delegated Transaction Flow
     
     private func sendDelegatedTransaction() {
@@ -286,16 +360,20 @@ struct TransactionView: View {
         
         let from = publicAddress
         let to = toAddress
-        let amountInWei = UserOpManager.shared.ethToWei(amountDouble)
+
+        let token = allowedTokensWithEth().first { ($0["address"] as? String)?.lowercased() == selectedTokenAddress.lowercased() }
+        let decimals = token?["decimals"] as? Int ?? 18
+        let amountInUnits = UserOpManager.shared.amountToUnits(amountDouble, decimals: decimals)
+        let tokenAddress: String? = (selectedTokenAddress == "ETH") ? nil : selectedTokenAddress
       
         guard let kernelAddress = EthereumKeyManager.shared.loadKernelAddress() else {
           errorText = "Kernel Account is empty"
           return
         }
         
-        print("🚀 Starting delegated tx: from=\(from), to=\(to), amount=\(amountDouble)")
+        print("🚀 Starting delegated tx: from=\(from), to=\(to), amount=\(amountDouble), token=\(tokenAddress ?? "ETH")")
         
-        UserOpManager.shared.prepareSignAndSendUserOp(kernelAddress: kernelAddress, from: from, to: to, amountInWei: amountInWei) { result in
+        UserOpManager.shared.prepareSignAndSendUserOp(kernelAddress: kernelAddress, from: from, to: to, amountInWei: amountInUnits, tokenAddress: tokenAddress) { result in
           DispatchQueue.main.async {
             isLoading = false
             

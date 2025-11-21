@@ -43,6 +43,10 @@ export interface CallPolicyPermission {
   valueLimit: bigint;
   dailyLimit: bigint;
   rules: CallPolicyParamRule[];
+  /**
+   * Optional decimals metadata for logging/formatting; not used on-chain.
+   */
+  decimals?: number;
 }
 
 export interface CallPolicyParamRule {

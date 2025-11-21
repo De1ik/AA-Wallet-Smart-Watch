@@ -2,6 +2,7 @@ import type { Request, Response, Router } from "express";
 import type { Address } from "viem";
 
 import { buildDelegatedSendUO, getPermissionId, sendUserOpV07, UnpackedUserOperationV07 } from "../utils/native-code";
+import { encodeFunctionData, parseAbi } from "viem";
 import { KERNEL_ADDRESS } from "./wallet.constants";
 import { buildBroadcastErrorResponse, ensureSufficientNativeBalance } from "./wallet.errors";
 
@@ -11,7 +12,7 @@ export function registerUserOperationRoutes(router: Router): void {
     try {
       console.log("[userOp/prepare] -> req.body:", req.body);
 
-      const { to, amountWei, data, delegatedEOA, kernelAddress } = req.body ?? {};
+      const { to, amountWei, data, delegatedEOA, kernelAddress, tokenAddress } = req.body ?? {};
 
       const permissionId = getPermissionId(delegatedEOA);
 
@@ -28,13 +29,29 @@ export function registerUserOperationRoutes(router: Router): void {
       }
       const amtWei = BigInt(amountWei.toString());
       const callData = typeof data === "string" && data.startsWith("0x") ? data : "0x";
+      let targetAddress = to as `0x${string}`;
+      let finalCallData = callData as `0x${string}`;
+
+      // If tokenAddress provided, build ERC20 transfer calldata and set target to token
+      if (tokenAddress) {
+        if (typeof tokenAddress !== "string" || !tokenAddress.startsWith("0x") || tokenAddress.length !== 42) {
+          return res.status(400).json({ error: "tokenAddress must be a valid 0x-address" });
+        }
+        const erc20Abi = parseAbi(["function transfer(address to, uint256 amount)"]);
+        finalCallData = encodeFunctionData({
+          abi: erc20Abi,
+          functionName: "transfer",
+          args: [to as `0x${string}`, amtWei],
+        });
+        targetAddress = tokenAddress as `0x${string}`;
+      }
 
       const { userOpHash } = await buildDelegatedSendUO(
         kernelAddress as `0x${string}`,
         permissionId,
-        to as `0x${string}`,
+        targetAddress,
         amtWei,
-        callData as `0x${string}`
+        finalCallData as `0x${string}`
       );
 
       console.log("[userOp/prepare] -> userOpHash:", userOpHash);
@@ -57,7 +74,7 @@ export function registerUserOperationRoutes(router: Router): void {
     try {
       console.log("[userOp/broadcast] -> req.body:", req.body);
 
-      const { to, amountWei, data, delegatedEOA, signature, opHash, kernelAddress } = req.body ?? {};
+      const { to, amountWei, data, delegatedEOA, signature, opHash, kernelAddress, tokenAddress } = req.body ?? {};
 
       const permissionId = getPermissionId(delegatedEOA);
 
@@ -92,12 +109,24 @@ export function registerUserOperationRoutes(router: Router): void {
         }
       }
 
+      let targetAddress = to as `0x${string}`;
+      let finalCallData = callData as `0x${string}`;
+      if (tokenAddress) {
+        const erc20Abi = parseAbi(["function transfer(address to, uint256 amount)"]);
+        finalCallData = encodeFunctionData({
+          abi: erc20Abi,
+          functionName: "transfer",
+          args: [to as `0x${string}`, amtWei],
+        });
+        targetAddress = tokenAddress as `0x${string}`;
+      }
+
       const { unpacked, userOpHash } = await buildDelegatedSendUO(
         kernelAddress as `0x${string}`,
         permissionId,
-        to as `0x${string}`,
+        targetAddress,
         amtWei,
-        callData as `0x${string}`,
+        finalCallData as `0x${string}`,
         signature as `0x${string}`
       );
 

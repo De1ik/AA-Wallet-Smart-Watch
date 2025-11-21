@@ -162,6 +162,11 @@ class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             print("SYNC_PERMISSION_DATA...")
             if let data = message["data"] as? [String: Any] {
                 print("Permission data synced:", data)
+                // Persist allowed tokens for transaction picker
+                if let tokens = data["allowedTokens"] as? [[String: Any]] {
+                    EthereumKeyManager.shared.saveAllowedTokens(tokens: tokens)
+                    print("Saved \(tokens.count) allowed tokens")
+                }
             }
             replyHandler([
                 "type": "PERMISSION_DATA_SYNCED",

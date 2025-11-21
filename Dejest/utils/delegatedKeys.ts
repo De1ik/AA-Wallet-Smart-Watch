@@ -17,6 +17,8 @@ export interface CallPolicyPermission {
   dailyLimit: string; // in ETH - NEW: Daily spending limit
   rules: CallPolicyParamRule[];
   dailyUsage?: string; // Optional: Current daily usage in ETH
+  decimals?: number; // Optional: token decimals for ERC20 limits
+  tokenSymbol?: string; // Optional: for display when selector is ERC20 transfer
 }
 
 export interface PredefinedAction {
@@ -32,8 +34,22 @@ export interface TargetAddress {
   address: string;
 }
 
+export interface TokenOption {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  color?: string;
+}
+
+export interface TokenSelection extends TokenOption {
+  maxValuePerTx: string;
+  maxValuePerDay: string;
+}
+
 export interface CallPolicySettings {
   allowedTargets: TargetAddress[];
+  allowedTokens: TokenSelection[];
   allowedActions: string[];
   maxValuePerTx: string; // in ETH
   maxValuePerDay: string; // in ETH

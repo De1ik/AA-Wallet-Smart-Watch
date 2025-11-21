@@ -6,7 +6,7 @@ import { router, Stack } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { apiClient, InstallationStatus } from '@/utils/apiClient';
 import { wsClient } from '@/utils/websocketClient';
-import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey, CallPolicyPermission, CallPolicyParamRule, CallPolicyParamCondition, PredefinedAction, CallPolicySettings } from '@/utils/delegatedKeys';
+import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey, CallPolicyPermission, CallPolicyParamRule, CallPolicyParamCondition, PredefinedAction, CallPolicySettings, TokenOption, TokenSelection } from '@/utils/delegatedKeys';
 import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData, smartWatchBridge } from '@/utils/smartWatchBridge';
 import { getKernelAddress } from '@/utils/config';
@@ -39,6 +39,7 @@ export default function CreateDelegatedKeyScreen() {
   const [showCallPolicySettings, setShowCallPolicySettings] = useState(false);
   const [callPolicySettings, setCallPolicySettings] = useState<CallPolicySettings>({
     allowedTargets: [],
+    allowedTokens: [],
     allowedActions: ['transfer'], // Set 'transfer' as default
     maxValuePerTx: '0.1',
     maxValuePerDay: '1.0'
@@ -56,7 +57,9 @@ export default function CreateDelegatedKeyScreen() {
     erc20: false
   });
   const [transferEnabled, setTransferEnabled] = useState(true);
-  
+  const [showTokenSelector, setShowTokenSelector] = useState(false);
+  const [tokenSearch, setTokenSearch] = useState('');
+
   // Predefined actions
   const predefinedActions: PredefinedAction[] = [
     { id: 'transfer', name: 'Transfer', description: 'Send tokens to any address', selector: '0xa9059cbb', category: 'transfer' },
@@ -68,6 +71,45 @@ export default function CreateDelegatedKeyScreen() {
     { id: 'claim', name: 'Claim Rewards', description: 'Claim staking rewards', selector: '0x379607f5', category: 'stake' },
     { id: 'deposit', name: 'Deposit', description: 'Deposit tokens to protocol', selector: '0x47e7ef24', category: 'other' },
     { id: 'withdraw', name: 'Withdraw', description: 'Withdraw tokens from protocol', selector: '0x2e1a7d4d', category: 'other' }
+  ];
+
+  // Supported tokens (aligned with server-side SEPOLIA_TOKENS)
+  const SUPPORTED_TOKENS: TokenOption[] = [
+    {
+      address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984',
+      symbol: 'UNI',
+      name: 'Uniswap',
+      decimals: 18,
+      color: '#FF007A',
+    },
+    {
+      address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',
+      symbol: 'WETH',
+      name: 'Wrapped Ether',
+      decimals: 18,
+      color: '#627EEA',
+    },
+    {
+      address: '0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      decimals: 6,
+      color: '#26a17b',
+    },
+    {
+      address: '0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8',
+      symbol: 'USDC',
+      name: 'USD Coin',
+      decimals: 6,
+      color: '#2775CA',
+    },
+    {
+      address: '0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357',
+      symbol: 'DAI',
+      name: 'Dai Stablecoin',
+      decimals: 18,
+      color: '#F5AC37',
+    },
   ];
 
   const handleKeyTypeSelect = (type: KeyType) => {
@@ -164,6 +206,19 @@ export default function CreateDelegatedKeyScreen() {
     }));
   };
 
+  const toggleTokenSelection = (token: TokenOption) => {
+    setCallPolicySettings(prev => {
+      const exists = prev.allowedTokens.some(t => t.address.toLowerCase() === token.address.toLowerCase());
+      const nextTokens: TokenSelection[] = exists
+        ? prev.allowedTokens.filter(t => t.address.toLowerCase() !== token.address.toLowerCase())
+        : [...prev.allowedTokens, { ...token, maxValuePerTx: prev.maxValuePerTx, maxValuePerDay: prev.maxValuePerDay }];
+      return { ...prev, allowedTokens: nextTokens };
+    });
+  };
+
+  const isTokenSelected = (token: TokenOption) =>
+    callPolicySettings.allowedTokens.some(t => t.address.toLowerCase() === token.address.toLowerCase());
+
   const toggleAction = (actionId: string) => {
     setCallPolicySettings(prev => ({
       ...prev,
@@ -250,6 +305,11 @@ export default function CreateDelegatedKeyScreen() {
     action.description.toLowerCase().includes(actionSearchQuery.toLowerCase())
   );
 
+  const filteredTokenOptions = SUPPORTED_TOKENS.filter(token =>
+    token.name.toLowerCase().includes(tokenSearch.toLowerCase()) ||
+    token.symbol.toLowerCase().includes(tokenSearch.toLowerCase())
+  );
+
   // Validate and filter max transaction amount input
   const handleMaxValuePerTxChange = (text: string) => {
     // Remove any non-numeric characters except decimal point
@@ -301,12 +361,14 @@ export default function CreateDelegatedKeyScreen() {
     
     const numTxValue = parseFloat(callPolicySettings.maxValuePerTx);
     const numDayValue = parseFloat(callPolicySettings.maxValuePerDay);
-    const hasValidTransferOptions = !callPolicySettings.allowedActions.includes('transfer') || 
-                                   !transferEnabled ||
-                                   (transferOptions.eth || transferOptions.erc20);
+    const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
+    const ethTransferNeedsTargets = !hasTransferAction || !transferOptions.eth || callPolicySettings.allowedTargets.length > 0;
+    const erc20TransferNeedsTokens = !hasTransferAction || !transferOptions.erc20 || callPolicySettings.allowedTokens.length > 0;
+    const hasNonTransferActions = callPolicySettings.allowedActions.some(id => id !== 'transfer');
+    const nonTransferNeedsTargets = !hasNonTransferActions || callPolicySettings.allowedTargets.length > 0;
+    const hasValidTransferOptions = !hasTransferAction || transferOptions.eth || transferOptions.erc20;
     
-    return callPolicySettings.allowedTargets.length > 0 &&
-           callPolicySettings.maxValuePerTx &&
+    return callPolicySettings.maxValuePerTx &&
            callPolicySettings.maxValuePerTx !== '0' &&
            callPolicySettings.maxValuePerTx !== '' &&
            callPolicySettings.maxValuePerTx !== '.' &&
@@ -319,6 +381,9 @@ export default function CreateDelegatedKeyScreen() {
            !isNaN(numDayValue) &&
            numDayValue > 0 &&
            callPolicySettings.allowedActions.length > 0 &&
+           nonTransferNeedsTargets &&
+           ethTransferNeedsTargets &&
+           erc20TransferNeedsTokens &&
            hasValidTransferOptions &&
            !maxValuePerTxError &&
            !maxValuePerDayError;
@@ -326,49 +391,57 @@ export default function CreateDelegatedKeyScreen() {
 
   const generateCallPolicyPermissions = (): CallPolicyPermission[] => {
     const permissions: CallPolicyPermission[] = [];
+    const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
     
-    // Create permissions for each allowed target and action combination
+    // ETH transfers (per target)
+    if (hasTransferAction && transferOptions.eth) {
+      callPolicySettings.allowedTargets.forEach(target => {
+        permissions.push({
+          callType: 0,
+          target: target.address,
+          selector: '0x00000000',
+          valueLimit: callPolicySettings.maxValuePerTx,
+          dailyLimit: callPolicySettings.maxValuePerDay,
+          rules: [],
+          decimals: 18,
+        });
+      });
+    }
+
+    // ERC20 transfers (per selected token)
+    if (hasTransferAction && transferOptions.erc20) {
+      callPolicySettings.allowedTokens.forEach(token => {
+        permissions.push({
+          callType: 0,
+          target: token.address,
+          selector: '0xa9059cbb',
+          valueLimit: token.maxValuePerTx,
+          dailyLimit: token.maxValuePerDay,
+          rules: [],
+          decimals: token.decimals,
+          tokenSymbol: token.symbol,
+        });
+      });
+    }
+
+    // Other actions on allowed targets
     callPolicySettings.allowedTargets.forEach(target => {
-      callPolicySettings.allowedActions.forEach(actionId => {
-        if (actionId === 'transfer' && transferEnabled) {
-          // Handle transfer with options
-          if (transferOptions.eth) {
-            // Add ETH transfer permission (selector 0x00000000)
-            permissions.push({
-              callType: 0, // Always CALL for user-friendly interface
-              target: target.address, // Use address from the TargetAddress object
-              selector: '0x00000000', // ETH transfer selector
-              valueLimit: callPolicySettings.maxValuePerTx,
-              dailyLimit: callPolicySettings.maxValuePerDay, // NEW: Include daily limit
-              rules: []
-            });
-          }
-          if (transferOptions.erc20) {
-            // Add ERC20 transfer permission (selector 0xa9059cbb)
-            permissions.push({
-              callType: 0, // Always CALL for user-friendly interface
-              target: target.address, // Use address from the TargetAddress object
-              selector: '0xa9059cbb', // ERC20 transfer selector
-              valueLimit: callPolicySettings.maxValuePerTx,
-              dailyLimit: callPolicySettings.maxValuePerDay, // NEW: Include daily limit
-              rules: []
-            });
-          }
-        } else {
-          // Handle other actions normally
+      callPolicySettings.allowedActions
+        .filter(actionId => actionId !== 'transfer')
+        .forEach(actionId => {
           const action = predefinedActions.find(a => a.id === actionId);
           if (action) {
             permissions.push({
-              callType: 0, // Always CALL for user-friendly interface
-              target: target.address, // Use address from the TargetAddress object
+              callType: 0,
+              target: target.address,
               selector: action.selector,
               valueLimit: callPolicySettings.maxValuePerTx,
-              dailyLimit: callPolicySettings.maxValuePerDay, // NEW: Include daily limit
-              rules: []
+              dailyLimit: callPolicySettings.maxValuePerDay,
+              rules: [],
+              decimals: 18,
             });
           }
-        }
-      });
+        });
     });
     
     return permissions;
@@ -451,6 +524,10 @@ export default function CreateDelegatedKeyScreen() {
         console.log('\n🎯 ALLOWED TARGET ADDRESSES:');
         callPolicySettings.allowedTargets.forEach((target, index) => {
           console.log(`   ${index + 1}. ${target.name} (${target.address})`);
+        });
+        console.log('\n🪙 ALLOWED TOKENS FOR ERC20 TRANSFERS:');
+        callPolicySettings.allowedTokens.forEach((token, index) => {
+          console.log(`   ${index + 1}. ${token.symbol} (${token.address}) dec:${token.decimals}`);
         });
         console.log('\n⚡ ALLOWED ACTIONS:');
         callPolicySettings.allowedActions.forEach((actionId, index) => {
@@ -535,7 +612,14 @@ export default function CreateDelegatedKeyScreen() {
         vId: delegatedKeyData.vId,
         deviceName: deviceName.trim(),
         keyType,
-        createdAt: delegatedKeyData.createdAt
+        createdAt: delegatedKeyData.createdAt,
+        allowedTokens: callPolicySettings.allowedTokens.map(t => ({
+          address: t.address,
+          symbol: t.symbol,
+          decimals: t.decimals,
+          maxValuePerTx: t.maxValuePerTx,
+          maxValuePerDay: t.maxValuePerDay,
+        })),
       };
 
       await syncPermissionData(watchPermissionData);
@@ -653,14 +737,36 @@ export default function CreateDelegatedKeyScreen() {
 
     // Validate Restricted settings (using CallPolicy)
     if (keyType === 'restricted') {
-      if (callPolicySettings.allowedTargets.length === 0) {
-        Alert.alert('Error', 'Please add at least one allowed target address');
-        return;
-      }
-
       const numTxValue = parseFloat(callPolicySettings.maxValuePerTx);
       const numDayValue = parseFloat(callPolicySettings.maxValuePerDay);
-      
+      const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
+      const needsEthTargets = hasTransferAction && transferOptions.eth;
+      const needsErc20Tokens = hasTransferAction && transferOptions.erc20;
+      const hasNonTransferActions = callPolicySettings.allowedActions.some(id => id !== 'transfer');
+
+      if (hasNonTransferActions && callPolicySettings.allowedTargets.length === 0) {
+        Alert.alert('Error', 'Please add at least one allowed target address for the selected actions');
+        return;
+      }
+      if (needsEthTargets && callPolicySettings.allowedTargets.length === 0) {
+        Alert.alert('Error', 'Please add at least one allowed target address for ETH transfers');
+        return;
+      }
+      if (needsErc20Tokens && callPolicySettings.allowedTokens.length === 0) {
+        Alert.alert('Error', 'Please select at least one ERC20 token to allow transfers');
+        return;
+      }
+      if (needsErc20Tokens) {
+        const invalidToken = callPolicySettings.allowedTokens.find(
+          t => isNaN(parseFloat(t.maxValuePerTx)) || parseFloat(t.maxValuePerTx) <= 0 ||
+               isNaN(parseFloat(t.maxValuePerDay)) || parseFloat(t.maxValuePerDay) <= 0
+        );
+        if (invalidToken) {
+          Alert.alert('Error', `Please set valid limits for ${invalidToken.symbol} (per tx and per day must be > 0)`);
+          return;
+        }
+      }
+
       if (!callPolicySettings.maxValuePerTx || 
           callPolicySettings.maxValuePerTx === '0' || 
           callPolicySettings.maxValuePerTx === '' ||
@@ -813,17 +919,17 @@ export default function CreateDelegatedKeyScreen() {
                     <Text style={styles.warningText}>
                       You need a connected Apple Watch to create delegated keys. The watch will generate and securely store the private keys.
                     </Text>
-                    <Text style={styles.warningSteps}>
-                      Steps to connect:
-                    </Text>
-                    <Text style={styles.warningStep}>1. Ensure your Apple Watch is paired with this iPhone</Text>
-                    <Text style={styles.warningStep}>2. Install the Dejest app on your Apple Watch</Text>
-                    <Text style={styles.warningStep}>3. Open the Dejest app on your watch</Text>
-                    <Text style={styles.warningStep}>4. Tap "Refresh" above to check connection</Text>
-                  </View>
+                  <Text style={styles.warningSteps}>
+                    Steps to connect:
+                  </Text>
+                  <Text style={styles.warningStep}>1. Ensure your Apple Watch is paired with this iPhone</Text>
+                  <Text style={styles.warningStep}>2. Install the Dejest app on your Apple Watch</Text>
+                  <Text style={styles.warningStep}>3. Open the Dejest app on your watch</Text>
+                  <Text style={styles.warningStep}>4. Tap "Refresh" above to check connection</Text>
                 </View>
-              )}
-            </View>
+              </View>
+            )}
+          </View>
 
             {/* Device Name */}
             <View style={styles.section}>
@@ -977,6 +1083,89 @@ export default function CreateDelegatedKeyScreen() {
                     <IconSymbol name="plus" size={16} color="#10B981" />
                     <Text style={styles.addTargetText}>Add Target Address</Text>
                   </TouchableOpacity>
+                </View>
+
+                {/* Allowed Tokens (ERC20) */}
+                <View style={styles.subsection}>
+                  <View style={styles.subsectionHeader}>
+                    <Text style={styles.subsectionTitle}>Allowed ERC20 Tokens</Text>
+                    {transferEnabled && transferOptions.erc20 && callPolicySettings.allowedTokens.length === 0 && (
+                      <Text style={styles.requiredIndicator}>* Required for ERC20 transfers</Text>
+                    )}
+                  </View>
+                  <Text style={styles.subsectionDescription}>
+                    Choose which tokens the watch can transfer
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.selectTokenButton}
+                    onPress={() => {
+                      setTokenSearch('');
+                      setShowTokenSelector(true);
+                    }}
+                  >
+                    <IconSymbol name="plus.circle.fill" size={18} color="#10B981" />
+                    <Text style={styles.selectTokenButtonText}>Select Tokens</Text>
+                  </TouchableOpacity>
+
+                  {callPolicySettings.allowedTokens.length > 0 ? (
+                    <View style={styles.tokenLimitsContainer}>
+                      {callPolicySettings.allowedTokens.map((token, idx) => (
+                        <View key={token.address} style={styles.tokenLimitCard}>
+                          <View style={styles.tokenLimitHeader}>
+                            <View style={[styles.tokenBadge, { backgroundColor: token.color || '#4B5563' }]} />
+                            <View style={styles.tokenInfo}>
+                              <Text style={[styles.tokenName, styles.tokenNameSelected]}>
+                                {token.name} ({token.symbol})
+                              </Text>
+                              <Text style={styles.tokenMeta}>Decimals: {token.decimals}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => toggleTokenSelection(token)}>
+                              <IconSymbol name="trash" size={18} color="#EF4444" />
+                            </TouchableOpacity>
+                          </View>
+                          <View style={styles.limitRow}>
+                            <View style={styles.limitField}>
+                              <Text style={styles.limitLabel}>Max per Tx</Text>
+                              <TextInput
+                                style={styles.limitInput}
+                                keyboardType="numeric"
+                                value={token.maxValuePerTx}
+                                onChangeText={(val) => {
+                                  setCallPolicySettings(prev => {
+                                    const copy = [...prev.allowedTokens];
+                                    copy[idx] = { ...copy[idx], maxValuePerTx: val };
+                                    return { ...prev, allowedTokens: copy };
+                                  });
+                                }}
+                                placeholder="e.g. 10"
+                                placeholderTextColor="#6B7280"
+                              />
+                            </View>
+                            <View style={styles.limitField}>
+                              <Text style={styles.limitLabel}>Max per Day</Text>
+                              <TextInput
+                                style={styles.limitInput}
+                                keyboardType="numeric"
+                                value={token.maxValuePerDay}
+                                onChangeText={(val) => {
+                                  setCallPolicySettings(prev => {
+                                    const copy = [...prev.allowedTokens];
+                                    copy[idx] = { ...copy[idx], maxValuePerDay: val };
+                                    return { ...prev, allowedTokens: copy };
+                                  });
+                                }}
+                                placeholder="e.g. 50"
+                                placeholderTextColor="#6B7280"
+                              />
+                            </View>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.emptyStateText}>No tokens selected yet.</Text>
+                  )}
                 </View>
 
                 {/* Allowed Actions */}
@@ -1134,11 +1323,11 @@ export default function CreateDelegatedKeyScreen() {
                 </View>
 
                 {/* Summary */}
-                {callPolicySettings.allowedTargets.length > 0 && callPolicySettings.allowedActions.length > 0 && (
+                {(callPolicySettings.allowedTargets.length > 0 || callPolicySettings.allowedTokens.length > 0) && callPolicySettings.allowedActions.length > 0 && (
                   <View style={styles.summaryContainer}>
                     <Text style={styles.summaryTitle}>Permission Summary</Text>
                     <Text style={styles.summaryText}>
-                      Your watch can perform {callPolicySettings.allowedActions.length} action(s) on {callPolicySettings.allowedTargets.length} contract(s) with a maximum of {callPolicySettings.maxValuePerTx} ETH per transaction and {callPolicySettings.maxValuePerDay} ETH per day.
+                      Your watch can perform {callPolicySettings.allowedActions.length} action(s) on {callPolicySettings.allowedTargets.length} contract(s) and {callPolicySettings.allowedTokens.length} token(s) with a maximum of {callPolicySettings.maxValuePerTx} units per transaction and {callPolicySettings.maxValuePerDay} units per day (ETH uses 18 decimals; ERC20 uses token decimals).
                     </Text>
                   </View>
                 )}
@@ -1501,6 +1690,98 @@ export default function CreateDelegatedKeyScreen() {
           </View>
         </Modal>
 
+        {/* Token Selector Modal */}
+        <Modal
+          visible={showTokenSelector}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => {
+            setShowTokenSelector(false);
+            setTokenSearch('');
+          }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.tokenModal}>
+              <View style={styles.tokenModalHeader}>
+                <Text style={styles.tokenModalTitle}>Select Supported Tokens</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowTokenSelector(false);
+                    setTokenSearch('');
+                  }}
+                  style={styles.closeButton}
+                >
+                  <IconSymbol name="xmark" size={20} color="#666666" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.searchContainer}>
+                <IconSymbol name="magnifyingglass" size={16} color="#666666" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search tokens..."
+                  placeholderTextColor="#666666"
+                  value={tokenSearch}
+                  onChangeText={setTokenSearch}
+                />
+              </View>
+
+              <ScrollView
+                style={styles.tokenList}
+                contentContainerStyle={styles.tokenListContent}
+              >
+                {filteredTokenOptions.map((token) => {
+                  const selected = isTokenSelected(token);
+                  return (
+                    <TouchableOpacity
+                      key={token.address}
+                      style={[
+                        styles.tokenItem,
+                        selected && styles.tokenItemSelected
+                      ]}
+                      onPress={() => toggleTokenSelection(token)}
+                    >
+                      <View style={[styles.tokenBadge, { backgroundColor: token.color || '#4B5563' }]} />
+                      <View style={styles.limitInfo}>
+                        <Text style={[
+                          styles.tokenName,
+                          selected && styles.tokenNameSelected
+                        ]}>
+                          {token.name} ({token.symbol})
+                        </Text>
+                        <Text style={styles.tokenMeta}>Decimals: {token.decimals}</Text>
+                        <Text style={styles.limitText}>Tap to {selected ? 'remove' : 'add'} this token</Text>
+                      </View>
+                      <View style={[
+                        styles.checkbox,
+                        selected && styles.checkboxSelected
+                      ]}>
+                        {selected && <IconSymbol name="checkmark" size={16} color="#FFFFFF" />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {filteredTokenOptions.length === 0 && (
+                  <Text style={styles.emptyStateText}>No supported tokens match your search.</Text>
+                )}
+              </ScrollView>
+
+              <View style={styles.tokenModalFooter}>
+                <TouchableOpacity
+                  style={styles.tokenModalButton}
+                  onPress={() => {
+                    setTokenSearch('');
+                    setShowTokenSelector(false);
+                  }}
+                >
+                  <Text style={styles.tokenModalButtonText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Address Confirmation Modal */}
         <Modal
           visible={showAddressConfirmation}
@@ -1825,6 +2106,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#EF4444',
   },
+  emptyStateText: {
+    fontSize: 14,
+    color: '#A0A0A0',
+    marginTop: 8,
+  },
   whitelistToggle: {
     flexDirection: 'row',
     backgroundColor: '#1A1A1A',
@@ -1893,6 +2179,23 @@ const styles = StyleSheet.create({
   removeButton: {
     padding: 4,
   },
+  selectTokenButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    borderStyle: 'dashed',
+    marginTop: 8,
+  },
+  selectTokenButtonText: {
+    color: '#10B981',
+    fontSize: 14,
+    fontWeight: '500',
+  },
   tokenLimitItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1912,10 +2215,87 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
+  tokenName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#E5E7EB',
+  },
+  tokenNameSelected: {
+    color: '#10B981',
+  },
   tokenAddress: {
     fontSize: 12,
     color: '#A0A0A0',
     fontFamily: 'monospace',
+  },
+  tokenMeta: {
+    fontSize: 12,
+    color: '#A0A0A0',
+  },
+  tokenLimitsContainer: {
+    gap: 12,
+    marginTop: 12,
+  },
+  tokenLimitCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#333333',
+    padding: 12,
+    gap: 12,
+  },
+  tokenLimitHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  limitRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  limitField: {
+    flex: 1,
+    gap: 6,
+  },
+  limitLabel: {
+    color: '#9CA3AF',
+    fontSize: 12,
+  },
+  limitInput: {
+    backgroundColor: '#111827',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    padding: 10,
+    color: '#FFFFFF',
+  },
+  tokenList: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  tokenListContent: {
+    gap: 12,
+  },
+  tokenItem: {
+    borderWidth: 1,
+    borderColor: '#333333',
+    backgroundColor: '#1A1A1A',
+    padding: 12,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  tokenItemSelected: {
+    borderColor: '#10B981',
+    backgroundColor: '#0F1A0F',
+  },
+  tokenBadge: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   limitInfo: {
     flex: 1,
@@ -2823,6 +3203,46 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#666666',
     fontFamily: 'monospace',
+  },
+
+  // Token Selector Modal Styles
+  tokenModal: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    margin: 20,
+    maxHeight: '75%',
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  tokenModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333333',
+  },
+  tokenModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  tokenModalFooter: {
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#333333',
+  },
+  tokenModalButton: {
+    backgroundColor: '#10B981',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  tokenModalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   
   // Transfer Options Modal Styles
