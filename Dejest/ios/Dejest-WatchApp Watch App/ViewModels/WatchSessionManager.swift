@@ -117,6 +117,14 @@ class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
               } else {
                 print("No whitelist provided in key generation request")
               }
+              
+              // Process allowed tokens if provided
+              if let tokens = data["allowedTokens"] as? [[String: Any]] {
+                EthereumKeyManager.shared.saveAllowedTokens(tokens: tokens)
+                print("Saved allowed tokens from key generation: \(tokens.count)")
+              } else {
+                print("No allowed tokens provided in key generation request")
+              }
             }
             
             let privateKey = try EthereumKeyManager.shared.generateKey()

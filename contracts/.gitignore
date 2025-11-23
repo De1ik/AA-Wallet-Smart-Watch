@@ -1,1 +1,19 @@
+# Secrets
 .env
+.env.*
+
+# Foundry build artifacts
+out/
+cache/
+broadcast/
+
+# Node (если используешь)
+node_modules/
+
+# OS/Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Foundry
+foundry.lock

@@ -32,10 +32,10 @@ export interface WatchPermissionData {
   allowedTokens?: {
     address: string;
     symbol: string;
+    name?: string;
     decimals: number;
-    maxValuePerTx: string;
-    maxValuePerDay: string;
   }[];
+  allowedRecipients?: string[];
 }
 
 export interface TargetAddress {
@@ -46,6 +46,12 @@ export interface TargetAddress {
 export interface WatchGenarteKeyData {
   kernelAddress: string;
   whitelist?: TargetAddress[]; // Optional whitelist of receivers
+  allowedTokens?: {
+    address: string;
+    symbol: string;
+    name?: string;
+    decimals: number;
+  }[];
 }
 
 

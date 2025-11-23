@@ -101,6 +101,39 @@ struct TransactionView: View {
                             .disableAutocorrection(true)
                             .padding(.bottom, 10)
                     }
+
+                    // Token Picker
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Token:")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        
+                        Button(action: {
+                            showTokenPicker = true
+                        }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(displayTokenName(address: selectedTokenAddress))
+                                        .font(.body)
+                                        .foregroundColor(.white)
+                                    Text(displayTokenAddressOrNative(address: selectedTokenAddress))
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.down")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                            .padding(8)
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(10)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.bottom, 10)
                     
                     // Modern Amount Entry
                     VStack(alignment: .leading, spacing: 6) {
@@ -333,6 +366,13 @@ struct TransactionView: View {
         if let tokens = EthereumKeyManager.shared.loadAllowedTokens() {
             allowedTokens = tokens
             print("Loaded allowed tokens: \(tokens.count)")
+            
+            // Auto-select first available token if no selection
+            if let first = tokens.first,
+               let addr = first["address"] as? String,
+               selectedTokenAddress == "ETH" {
+                selectedTokenAddress = addr
+            }
         }
     }
     
@@ -346,6 +386,12 @@ struct TransactionView: View {
         if address == "ETH" { return "ETH" }
         let token = allowedTokens.first { ($0["address"] as? String)?.lowercased() == address.lowercased() }
         return token?["symbol"] as? String ?? "Token"
+    }
+    
+    private func displayTokenAddressOrNative(address: String) -> String {
+        if address == "ETH" { return "Native ETH" }
+        let token = allowedTokens.first { ($0["address"] as? String)?.lowercased() == address.lowercased() }
+        return token?["address"] as? String ?? address
     }
     
     // MARK: - Delegated Transaction Flow

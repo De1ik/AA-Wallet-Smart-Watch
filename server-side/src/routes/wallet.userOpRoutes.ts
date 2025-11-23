@@ -14,6 +14,10 @@ export function registerUserOperationRoutes(router: Router): void {
 
       const { to, amountWei, data, delegatedEOA, kernelAddress, tokenAddress } = req.body ?? {};
 
+      console.log("*".repeat(30))
+      console.log("PREPARE:", req.body)
+      console.log("*".repeat(30))
+
       const permissionId = getPermissionId(delegatedEOA);
 
       console.log("[userOp/prepare] -> permissionId:", permissionId);
@@ -31,6 +35,7 @@ export function registerUserOperationRoutes(router: Router): void {
       const callData = typeof data === "string" && data.startsWith("0x") ? data : "0x";
       let targetAddress = to as `0x${string}`;
       let finalCallData = callData as `0x${string}`;
+      let valueToSend = amtWei;
 
       // If tokenAddress provided, build ERC20 transfer calldata and set target to token
       if (tokenAddress) {
@@ -44,13 +49,14 @@ export function registerUserOperationRoutes(router: Router): void {
           args: [to as `0x${string}`, amtWei],
         });
         targetAddress = tokenAddress as `0x${string}`;
+        valueToSend = 0n; // Token transfers should not send native value to the token contract
       }
 
       const { userOpHash } = await buildDelegatedSendUO(
         kernelAddress as `0x${string}`,
         permissionId,
         targetAddress,
-        amtWei,
+        valueToSend,
         finalCallData as `0x${string}`
       );
 
@@ -58,7 +64,7 @@ export function registerUserOperationRoutes(router: Router): void {
 
       return res.json({
         userOpHash,
-        echo: { permissionId, to, amountWei: amtWei.toString(), data: callData },
+        echo: { permissionId, to, amountWei: valueToSend.toString(), data: callData, tokenAddress: tokenAddress ?? null },
       });
     } catch (err: any) {
       console.error("[/userOp/prepare] error:", err);
@@ -96,7 +102,8 @@ export function registerUserOperationRoutes(router: Router): void {
       const callData = typeof data === "string" && data.startsWith("0x") ? data : "0x";
       normalizedKernelAddress = (kernelAddress as Address) ?? KERNEL_ADDRESS;
 
-      if (normalizedKernelAddress && amtWei > 0n) {
+      // Native balance check only matters for native value transfers
+      if (!tokenAddress && normalizedKernelAddress && amtWei > 0n) {
         const { ok, availableWei } = await ensureSufficientNativeBalance(normalizedKernelAddress, amtWei);
         if (!ok) {
           return res.status(400).json({
@@ -111,6 +118,8 @@ export function registerUserOperationRoutes(router: Router): void {
 
       let targetAddress = to as `0x${string}`;
       let finalCallData = callData as `0x${string}`;
+      let valueToSend = amtWei as bigint;
+      
       if (tokenAddress) {
         const erc20Abi = parseAbi(["function transfer(address to, uint256 amount)"]);
         finalCallData = encodeFunctionData({
@@ -119,13 +128,14 @@ export function registerUserOperationRoutes(router: Router): void {
           args: [to as `0x${string}`, amtWei],
         });
         targetAddress = tokenAddress as `0x${string}`;
+        valueToSend = 0n; // avoid sending native value to ERC20 contracts
       }
 
       const { unpacked, userOpHash } = await buildDelegatedSendUO(
         kernelAddress as `0x${string}`,
         permissionId,
         targetAddress,
-        amtWei,
+        valueToSend,
         finalCallData as `0x${string}`,
         signature as `0x${string}`
       );

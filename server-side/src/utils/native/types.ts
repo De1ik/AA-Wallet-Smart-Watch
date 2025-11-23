@@ -39,14 +39,9 @@ export interface UserOperation {
 export interface CallPolicyPermission {
   callType: number;
   target: `0x${string}`;
+  delegatedKey: `0x${string}`;
   selector: `0x${string}`;
-  valueLimit: bigint;
-  dailyLimit: bigint;
   rules: CallPolicyParamRule[];
-  /**
-   * Optional decimals metadata for logging/formatting; not used on-chain.
-   */
-  decimals?: number;
 }
 
 export interface CallPolicyParamRule {

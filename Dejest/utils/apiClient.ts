@@ -1,3 +1,4 @@
+import { AllPermissionsPerDelegatedKey, RequestCreateDelegateKey } from '@/types/types';
 import { config } from './config';
 
 // API Response types
@@ -267,8 +268,8 @@ class ApiClient {
   async createDelegatedKey(params: {
     delegatedEOA: string;
     keyType: 'sudo' | 'restricted' | 'callpolicy';
-    clientId?: string;
-    permissions?: any[]; // CallPolicy permissions for restricted keys
+    clientId: string;
+    permissions: RequestCreateDelegateKey;
   }): Promise<CreateDelegatedKeyResponse> {
     return this.makeRequest<CreateDelegatedKeyResponse>('/wallet/delegated/create', {
       method: 'POST',
@@ -347,17 +348,7 @@ class ApiClient {
     owner: string;
   }): Promise<{
     success: boolean;
-    permissions: Array<{
-      index: number;
-      permissionHash: string;
-      callType: number;
-      target: string;
-      selector: string;
-      valueLimit: string;
-      dailyLimit: string;
-      rules: any[];
-      dailyUsage: string;
-    }>;
+    permissions: AllPermissionsPerDelegatedKey;
     message: string;
   }> {
     return this.makeRequest('/wallet/callpolicy/all-permissions-with-usage', {

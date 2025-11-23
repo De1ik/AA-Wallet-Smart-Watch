@@ -12,11 +12,13 @@ export interface TokenLimit {
 export interface CallPolicyPermission {
   callType: number; // 0 = CALLTYPE_SINGLE, 1 = CALLTYPE_DELEGATECALL
   target: string;
+  delegatedKey: string;
   selector: string;
-  valueLimit: string; // in ETH
-  dailyLimit: string; // in ETH - NEW: Daily spending limit
   rules: CallPolicyParamRule[];
   dailyUsage?: string; // Optional: Current daily usage in ETH
+  // Optional metadata for UI only (not used on-chain)
+  valueLimit?: string; // in ETH or token units
+  dailyLimit?: string; // in ETH or token units
   decimals?: number; // Optional: token decimals for ERC20 limits
   tokenSymbol?: string; // Optional: for display when selector is ERC20 transfer
 }

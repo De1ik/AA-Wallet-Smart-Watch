@@ -91,7 +91,11 @@ export function buildPermissionValidationData(delegatedEOA: Address): Hex {
   return encodeAbiParameters([{ type: "bytes[]" }], [[policyElem, signerElem]]) as Hex;
 }
 
-export function buildCallPolicyValidationData(delegatedEOA: Address, permissions: CallPolicyPermission[]): Hex {
+export function buildCallPolicyValidationData(
+  delegatedEOA: Address,
+  permissions: CallPolicyPermission[],
+): Hex {
+  // PolicyBase.onInstall expects data = policyId (32 bytes) ++ abi.encode(Permission[])
   const permissionsData = encodeAbiParameters(
     [
       {
@@ -99,9 +103,8 @@ export function buildCallPolicyValidationData(delegatedEOA: Address, permissions
         components: [
           { name: "callType", type: "uint8" },
           { name: "target", type: "address" },
+          { name: "delegatedKey", type: "address" },
           { name: "selector", type: "bytes4" },
-          { name: "valueLimit", type: "uint256" },
-          { name: "dailyLimit", type: "uint256" },
           {
             name: "rules",
             type: "tuple[]",
@@ -118,9 +121,8 @@ export function buildCallPolicyValidationData(delegatedEOA: Address, permissions
       permissions.map((p) => ({
         callType: p.callType,
         target: p.target,
+        delegatedKey: p.delegatedKey,
         selector: p.selector,
-        valueLimit: p.valueLimit,
-        dailyLimit: p.dailyLimit,
         rules: p.rules.map((r) => ({
           condition: r.condition,
           offset: r.offset,

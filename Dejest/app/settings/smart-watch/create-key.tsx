@@ -11,6 +11,7 @@ import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData, smartWatchBridge } from '@/utils/smartWatchBridge';
 import { getKernelAddress } from '@/utils/config';
 import { installationState } from '@/utils/installationState';
+import { PermissionTokenEntry, RequestCreateDelegateKey } from '@/types/types';
 
 export default function CreateDelegatedKeyScreen() {
   const [keyType, setKeyType] = useState<KeyType>('restricted');
@@ -389,7 +390,7 @@ export default function CreateDelegatedKeyScreen() {
            !maxValuePerDayError;
   };
 
-  const generateCallPolicyPermissions = (): CallPolicyPermission[] => {
+  const generateCallPolicyPermissions = (delegatedKey: string): CallPolicyPermission[] => {
     const permissions: CallPolicyPermission[] = [];
     const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
     
@@ -399,12 +400,13 @@ export default function CreateDelegatedKeyScreen() {
         permissions.push({
           callType: 0,
           target: target.address,
+          delegatedKey,
           selector: '0x00000000',
-          valueLimit: callPolicySettings.maxValuePerTx,
-          dailyLimit: callPolicySettings.maxValuePerDay,
           rules: [],
           decimals: 18,
-        });
+          valueLimit: callPolicySettings.maxValuePerTx,
+          dailyLimit: callPolicySettings.maxValuePerDay,
+        } as );
       });
     }
 
@@ -414,12 +416,13 @@ export default function CreateDelegatedKeyScreen() {
         permissions.push({
           callType: 0,
           target: token.address,
+          delegatedKey,
           selector: '0xa9059cbb',
-          valueLimit: token.maxValuePerTx,
-          dailyLimit: token.maxValuePerDay,
           rules: [],
           decimals: token.decimals,
           tokenSymbol: token.symbol,
+          valueLimit: token.maxValuePerTx,
+          dailyLimit: token.maxValuePerDay,
         });
       });
     }
@@ -434,17 +437,130 @@ export default function CreateDelegatedKeyScreen() {
             permissions.push({
               callType: 0,
               target: target.address,
+              delegatedKey,
               selector: action.selector,
-              valueLimit: callPolicySettings.maxValuePerTx,
-              dailyLimit: callPolicySettings.maxValuePerDay,
               rules: [],
               decimals: 18,
+              valueLimit: callPolicySettings.maxValuePerTx,
+              dailyLimit: callPolicySettings.maxValuePerDay,
             });
           }
         });
     });
     
     return permissions;
+  };
+
+  const buildPermissionTokenEntries = (delegatedKey: string): PermissionTokenEntry[] => {
+    const zeroAddress = '0x0000000000000000000000000000000000000000';
+    const entries: PermissionTokenEntry[] = [];
+    const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
+
+    // ETH transfers
+    if (hasTransferAction && transferOptions.eth) {
+      callPolicySettings.allowedTargets.forEach(target => {
+        entries.push({
+          permission: {
+            callType: 0,
+            target: target.address,
+            delegatedKey,
+            selector: '0x00000000',
+            rules: [],
+          },
+          tokenLimitEntry: {
+            token: zeroAddress,
+            limit: {
+              enabled: true,
+              txLimit: callPolicySettings.maxValuePerTx,
+              dailyLimit: callPolicySettings.maxValuePerDay,
+            },
+          },
+        });
+      });
+    }
+
+    // ERC20 transfers
+    if (hasTransferAction && transferOptions.erc20) {
+      callPolicySettings.allowedTokens.forEach(token => {
+        entries.push({
+          permission: {
+            callType: 0,
+            target: token.address,
+            delegatedKey,
+            selector: '0xa9059cbb',
+            rules: [],
+          },
+          tokenLimitEntry: {
+            token: token.address,
+            limit: {
+              enabled: true,
+              txLimit: token.maxValuePerTx,
+              dailyLimit: token.maxValuePerDay,
+            },
+          },
+        });
+      });
+    }
+
+    // Other actions (no token limits needed)
+    callPolicySettings.allowedTargets.forEach(target => {
+      callPolicySettings.allowedActions
+        .filter(actionId => actionId !== 'transfer')
+        .forEach(actionId => {
+          const action = predefinedActions.find(a => a.id === actionId);
+          if (!action) return;
+          entries.push({
+            permission: {
+              callType: 0,
+              target: target.address,
+              delegatedKey,
+              selector: action.selector,
+              rules: [],
+            },
+            tokenLimitEntry: {
+              token: zeroAddress,
+              limit: {
+                enabled: false,
+                txLimit: '0',
+                dailyLimit: '0',
+              },
+            },
+          });
+        });
+    });
+
+    return entries;
+  };
+
+  const buildCallPolicyConfig = () => {
+    const tokenLimits = [];
+
+    if (transferEnabled && transferOptions.eth) {
+      tokenLimits.push({
+        token: '0x0000000000000000000000000000000000000000',
+        txLimit: callPolicySettings.maxValuePerTx,
+        dailyLimit: callPolicySettings.maxValuePerDay,
+        decimals: 18,
+        enabled: true,
+      });
+    }
+
+    if (transferEnabled && transferOptions.erc20) {
+      callPolicySettings.allowedTokens.forEach(token => {
+        tokenLimits.push({
+          token: token.address,
+          txLimit: token.maxValuePerTx,
+          dailyLimit: token.maxValuePerDay,
+          decimals: token.decimals,
+          enabled: true,
+        });
+      });
+    }
+
+    return {
+      tokenLimits,
+      recipients: callPolicySettings.allowedTargets.map(target => target.address),
+    };
   };
 
   const handleCancelOperation = () => {
@@ -504,19 +620,18 @@ export default function CreateDelegatedKeyScreen() {
 
       // Start the installation process
       const clientId = wsClient.getClientId();
-      const requestData: any = {
+      const permissionEntries = buildPermissionTokenEntries(delegatedEOA);
+      const requestData = {
         delegatedEOA,
-        keyType,
-        clientId
+        keyType: keyType === 'restricted' ? 'callpolicy' : keyType,
+        clientId,
+        permissions: {
+          permissions: permissionEntries,
+        } as RequestCreateDelegateKey,
       };
       
-      // Add permissions for Restricted (using CallPolicy)
+      // Log CallPolicy restrictions being sent
       if (keyType === 'restricted') {
-        const permissions = generateCallPolicyPermissions();
-        requestData.permissions = permissions;
-        requestData.keyType = 'callpolicy'; // Send as callpolicy to server
-        
-        // Log CallPolicy restrictions being sent
         console.log('\n📱 ===== CLIENT: CALLPOLICY RESTRICTIONS =====');
         console.log(`🔑 Key Type: ${keyType}`);
         console.log(`💰 Max Value Per Transaction: ${callPolicySettings.maxValuePerTx} ETH`);
@@ -550,7 +665,8 @@ export default function CreateDelegatedKeyScreen() {
           }
         });
         console.log('\n🔐 GENERATED PERMISSIONS:');
-        permissions.forEach((perm, index) => {
+        permissionEntries.forEach((entry, index) => {
+          const perm = entry.permission;
           let actionName = 'Unknown';
           if (perm.selector === '0x00000000') {
             actionName = 'ETH Transfer';
@@ -563,8 +679,7 @@ export default function CreateDelegatedKeyScreen() {
           console.log(`   ${index + 1}. ${actionName}`);
           console.log(`      Target: ${perm.target}`);
           console.log(`      Selector: ${perm.selector}`);
-          console.log(`      Value Limit: ${perm.valueLimit} ETH`);
-          console.log(`      Daily Limit: ${perm.dailyLimit} ETH`);
+          console.log(`      Token Limit:`, entry.tokenLimitEntry);
           console.log(`      Rules: ${perm.rules.length > 0 ? JSON.stringify(perm.rules, null, 8) : 'None'}`);
           console.log('');
         });
@@ -600,7 +715,7 @@ export default function CreateDelegatedKeyScreen() {
         installationStatus: 'completed', // Mark as completed
         installationProgress: undefined, // Clear progress data when completed
         ...(keyType === 'restricted' && {
-          callPolicyPermissions: generateCallPolicyPermissions()
+          callPolicyPermissions: generateCallPolicyPermissions(keyPair.address)
         })
       };
 
@@ -616,10 +731,10 @@ export default function CreateDelegatedKeyScreen() {
         allowedTokens: callPolicySettings.allowedTokens.map(t => ({
           address: t.address,
           symbol: t.symbol,
+          name: t.name,
           decimals: t.decimals,
-          maxValuePerTx: t.maxValuePerTx,
-          maxValuePerDay: t.maxValuePerDay,
         })),
+        allowedRecipients: callPolicySettings.allowedTargets.map(t => t.address),
       };
 
       await syncPermissionData(watchPermissionData);
@@ -822,7 +937,13 @@ export default function CreateDelegatedKeyScreen() {
       console.log('[create-key] -> whitelist:', whitelist);
       const keyPair = await requestKeyGeneration({ 
         kernelAddress,
-        whitelist 
+        whitelist,
+        allowedTokens: callPolicySettings.allowedTokens.map(t => ({
+          address: t.address,
+          symbol: t.symbol,
+          name: t.name,
+          decimals: t.decimals,
+        }))
       });
       
       console.log('Key pair generated on smart watch:');

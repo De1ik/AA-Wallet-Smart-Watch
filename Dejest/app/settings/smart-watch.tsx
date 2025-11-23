@@ -212,39 +212,40 @@ export default function SmartWatchScreen() {
         if (usageResponse.success) {
           console.log('[Restrictions] Contract data with usage fetched:', usageResponse.permissions);
           
-          // Convert the response to match our CallPolicyPermission interface
-          const convertedPermissions = usageResponse.permissions.map(perm => ({
-            callType: perm.callType || 0, // Use decoded callType from API
-            target: perm.target || '0x0000000000000000000000000000000000000000', // Use decoded target from API
-            selector: perm.selector || '0x00000000', // Use decoded selector from API
-            valueLimit: perm.valueLimit,
-            dailyLimit: perm.dailyLimit,
-            rules: perm.rules,
-            dailyUsage: perm.dailyUsage // Add daily usage info
-          }));
+          // // Convert the response to match our CallPolicyPermission interface
+          // const convertedPermissions = usageResponse.permissions.map(perm => ({
+          //   callType: perm.callType || 0, // Use decoded callType from API
+          //   target: perm.target || '0x0000000000000000000000000000000000000000', // Use decoded target from API
+          //   selector: perm.selector || '0x00000000', // Use decoded selector from API
+          //   delegatedKey: perm.delegatedKey || selectedDeviceForRestrictions.publicAddress,
+          //   rules: perm.rules || [],
+          //   valueLimit: perm.valueLimit ?? 'N/A',
+          //   dailyLimit: perm.dailyLimit ?? 'N/A',
+          //   dailyUsage: perm.dailyUsage // Add daily usage info
+          // }));
           
-          // Update the device data with fresh contract data including usage
-          const updatedDevice = {
-            ...selectedDeviceForRestrictions,
-            callPolicyPermissions: convertedPermissions
-          };
+          // // Update the device data with fresh contract data including usage
+          // const updatedDevice = {
+          //   ...selectedDeviceForRestrictions,
+          //   callPolicyPermissions: convertedPermissions
+          // };
           
-          // Update local storage
-          await updateDelegatedKey(selectedDeviceForRestrictions.id, {
-            callPolicyPermissions: convertedPermissions
-          });
+          // // Update local storage
+          // await updateDelegatedKey(selectedDeviceForRestrictions.id, {
+          //   callPolicyPermissions: convertedPermissions
+          // });
           
-          // Update the selected device for display
-          setSelectedDeviceForRestrictions(updatedDevice);
+          // // Update the selected device for display
+          // setSelectedDeviceForRestrictions(updatedDevice);
           
-          // Reload the full list
-          await loadDelegatedKeys();
+          // // Reload the full list
+          // await loadDelegatedKeys();
           
-          Alert.alert(
-            'Data Refreshed',
-            `Successfully fetched ${usageResponse.permissions.length} permissions with daily usage from the smart contract.`,
-            [{ text: 'OK' }]
-          );
+          // Alert.alert(
+          //   'Data Refreshed',
+          //   `Successfully fetched ${usageResponse.permissions.length} permissions with daily usage from the smart contract.`,
+          //   [{ text: 'OK' }]
+          // );
           return;
         }
       } catch (usageError) {
@@ -260,16 +261,25 @@ export default function SmartWatchScreen() {
       
       if (response.success) {
         console.log('[Restrictions] Contract data fetched:', response.permissions);
+        const normalizedPermissions = response.permissions.map((perm: any) => ({
+          callType: perm.callType || 0,
+          target: perm.target || '0x0000000000000000000000000000000000000000',
+          selector: perm.selector || '0x00000000',
+          delegatedKey: perm.delegatedKey || selectedDeviceForRestrictions.publicAddress,
+          rules: perm.rules || [],
+          valueLimit: perm.valueLimit ?? 'N/A',
+          dailyLimit: perm.dailyLimit ?? 'N/A',
+        }));
         
         // Update the device data with fresh contract data
         const updatedDevice = {
           ...selectedDeviceForRestrictions,
-          callPolicyPermissions: response.permissions
+          callPolicyPermissions: normalizedPermissions
         };
         
         // Update local storage
         await updateDelegatedKey(selectedDeviceForRestrictions.id, {
-          callPolicyPermissions: response.permissions
+          callPolicyPermissions: normalizedPermissions
         });
         
         // Update the selected device for display
@@ -344,6 +354,19 @@ export default function SmartWatchScreen() {
       default:
         return 'Connected'; // Default to connected for backward compatibility
     }
+  };
+
+  const formatMaxPermissionValue = () => {
+    if (!selectedDeviceForRestrictions?.callPolicyPermissions?.length) {
+      return 'Not set';
+    }
+    const numericValues = selectedDeviceForRestrictions.callPolicyPermissions
+      .map(p => parseFloat(p.valueLimit ?? ''))
+      .filter(v => !isNaN(v) && isFinite(v));
+    if (numericValues.length === 0) {
+      return 'Not set';
+    }
+    return `${Math.max(...numericValues)} (per action unit)`;
   };
 
   const handleDisconnectDevice = (deviceId: string) => {
@@ -1181,8 +1204,12 @@ export default function SmartWatchScreen() {
 
                             const decimals = permission.decimals ?? 18;
                             const unitLabel = permission.selector === '0x00000000' ? 'ETH' : permission.selector === '0xa9059cbb' ? (permission.tokenSymbol ?? 'TOKEN') : 'units';
-                            const valueLimitDisplay = `${permission.valueLimit} ${unitLabel} (decimals: ${decimals})`;
-                            const dailyLimitDisplay = `${permission.dailyLimit} ${unitLabel} (decimals: ${decimals})`;
+                            const valueLimitDisplay = permission.valueLimit
+                              ? `${permission.valueLimit} ${unitLabel} (decimals: ${decimals})`
+                              : 'Not set';
+                            const dailyLimitDisplay = permission.dailyLimit
+                              ? `${permission.dailyLimit} ${unitLabel} (decimals: ${decimals})`
+                              : 'Not set';
                             const dailyUsageDisplay = permission.dailyUsage
                               ? `${permission.dailyUsage} ${unitLabel} (decimals: ${decimals})`
                               : null;
@@ -1283,7 +1310,7 @@ export default function SmartWatchScreen() {
                         <View style={styles.summaryItem}>
                           <Text style={styles.summaryLabel}>Max Transaction Value</Text>
                           <Text style={styles.summaryValue}>
-                            {Math.max(...selectedDeviceForRestrictions.callPolicyPermissions.map(p => parseFloat(p.valueLimit) || 0))} (per action unit)
+                            {formatMaxPermissionValue()}
                           </Text>
                         </View>
                       </View>

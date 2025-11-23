@@ -1,5 +1,5 @@
 import type { Request, Response, Router } from "express";
-import { parseUnits } from "viem";
+import { Address, parseUnits } from "viem";
 
 import {
   buildEnableSelectorUO,
@@ -7,9 +7,14 @@ import {
   buildInstallCallPolicyUO,
   buildInstallPermissionUO,
   buildUninstallPermissionUO,
+  buildSetTokenLimitUO,
+  buildSetRecipientAllowedUO,
   CallPolicyPermission,
   getRootCurrentNonce,
   sendUserOpV07,
+  KERNEL,
+  getAllowedTokens,
+  getAllowedRecipients,
 } from "../utils/native-code";
 import { InstallationStatus } from "../services/websocket";
 import { wsService } from "../index";
@@ -18,13 +23,46 @@ import { checkPrefundSimple } from "./wallet.prefund";
 // Constant for the execute function selector (defined by kernel contract)
 const EXECUTE_SELECTOR = "0xe9ae5c53" as `0x${string}`;
 
+type TokenLimitInput = {
+  token: string;
+  txLimit: string | number;
+  dailyLimit: string | number;
+  decimals?: number;
+  enabled?: boolean;
+};
+
+type CallPolicyConfigInput = {
+  tokenLimits?: TokenLimitInput[];
+  recipients?: string[];
+};
+
+type NormalizedTokenLimit = {
+  token: Address;
+  txLimit: bigint;
+  dailyLimit: bigint;
+  enabled: boolean;
+};
+
+type NormalizedCallPolicyPayload = {
+  callPolicyPermissions: CallPolicyPermission[];
+  tokenLimits: NormalizedTokenLimit[];
+  recipients: Address[];
+};
+
 export function registerDelegatedRoutes(router: Router): void {
   // Route to create a delegated key with specified permissions (include full flow)
   router.post("/delegated/create", async (req: Request, res: Response) => {
     try {
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
       console.log("[delegated/create] -> req.body:", req.body);
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
 
-      const { delegatedEOA, keyType, clientId, permissions } = req.body ?? {};
+
+      const { delegatedEOA, keyType, clientId, permissions, callPolicyConfig } = req.body ?? {};
 
       // validate the format of delegatedEOA (expect correct address)
       const validationError = validateDelegatedEOA(delegatedEOA);
@@ -41,13 +79,13 @@ export function registerDelegatedRoutes(router: Router): void {
 
       // callpolicy - restricted policy, requires permissions array
       if (keyType === "callpolicy") {
-        if (!permissions || !Array.isArray(permissions) || permissions.length === 0) {
+        if (!permissions) {
           return res
             .status(400)
-            .json({ error: "permissions is required for callpolicy keyType and must be a non-empty array" });
+            .json({ error: "permissions is required for callpolicy keyType" });
         }
 
-        // validate permissions input format for each key
+        // validate permissions input format for each key (supports both legacy array and RequestCreateDelegateKey shape)
         const permissionValidationError = validateCallPolicyPermissions(permissions);
         if (permissionValidationError) {
           return res.status(400).json({ error: permissionValidationError });
@@ -76,8 +114,37 @@ export function registerDelegatedRoutes(router: Router): void {
         });
       }
 
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+      console.log("Permission:");
+      console.log(permissions);
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+
       // Start the installation process asynchronously
-      performDelegatedKeyInstallation(installationId, delegatedEOA, keyType, clientId, permissions);
+      let normalizedCallPolicy: NormalizedCallPolicyPayload | null = null;
+      if (keyType === "callpolicy") {
+        normalizedCallPolicy = extractCallPolicyPayload(permissions, callPolicyConfig, delegatedEOA);
+
+        if (!normalizedCallPolicy.callPolicyPermissions.length) {
+          return res.status(400).json({
+            error: "No permissions provided",
+            message: "At least one permission is required for callpolicy",
+          });
+        }
+      }
+
+      performDelegatedKeyInstallation(
+        installationId,
+        delegatedEOA,
+        keyType,
+        clientId,
+        normalizedCallPolicy?.callPolicyPermissions ?? [],
+        normalizedCallPolicy?.tokenLimits ?? [],
+        normalizedCallPolicy?.recipients ?? []
+      );
 
       return res.json({
         success: true,
@@ -225,31 +292,52 @@ function validateDelegatedEOA(address: unknown): string | null {
 }
 
 // Helper to convert input permissions to CallPolicyPermission format
-function convertToCallPolicyPermissions(permissions: any[]): CallPolicyPermission[] {
+function convertToCallPolicyPermissions(permissions: any[], delegatedEOA: string): CallPolicyPermission[] {
+  console.log("*".repeat(50));
+  console.log("*".repeat(50));
+  console.log("Converting permissions:", permissions);
+  console.log("*".repeat(50));
+  console.log("*".repeat(50));
+
   return permissions.map((perm) => {
-    const decimals = typeof perm.decimals === "number" ? perm.decimals : 18;
-    const toBigIntUnits = (val: any) => {
-      const asString = val?.toString?.() ?? "0";
-      return parseUnits(asString, decimals);
-    };
+    const selector = perm.selector === "0x" ? "0x00000000" : perm.selector;
     return {
-      callType: perm.callType,
+      callType: Number(perm.callType) || 0,
       target: perm.target as `0x${string}`,
-      selector: (perm.selector === "0x" ? "0x00000000" : perm.selector) as `0x${string}`,
-      valueLimit: toBigIntUnits(perm.valueLimit),
-      dailyLimit: toBigIntUnits(perm.dailyLimit ?? 0),
+      delegatedKey: (perm.delegatedKey || delegatedEOA) as `0x${string}`,
+      selector: selector as `0x${string}`,
       rules: (perm.rules || []).map((rule: any) => ({
-        condition: rule.condition,
-        offset: rule.offset,
-        params: rule.params || [],
+        condition: Number(rule.condition) || 0,
+        offset: BigInt(rule.offset ?? 0),
+        params: (rule.params || []) as `0x${string}`[],
       })),
-      decimals,
     };
   });
 }
 
 // helper to validate call policy permissions format (we expect specific input format)
 function validateCallPolicyPermissions(permissions: any[]): string | null {
+  // RequestCreateDelegateKey shape
+  if (permissions && (permissions as any).permissions && Array.isArray((permissions as any).permissions)) {
+    const entries = (permissions as any).permissions;
+    for (let i = 0; i < entries.length; i++) {
+      const perm = entries[i]?.permission ?? entries[i];
+      if (!perm) {
+        return `permissions.permissions[${i}] is required`;
+      }
+      if (perm.callType === undefined || typeof perm.callType !== "number") {
+        return `permissions.permissions[${i}].callType is required and must be a number (0 or 1)`;
+      }
+      if (!perm.target || typeof perm.target !== "string") {
+        return `permissions.permissions[${i}].target is required and must be a valid Ethereum address`;
+      }
+      if (!perm.selector || typeof perm.selector !== "string") {
+        return `permissions.permissions[${i}].selector is required and must be a 4-byte hex string`;
+      }
+    }
+    return null;
+  }
+
   for (let i = 0; i < permissions.length; i++) {
     const perm = permissions[i];
     if (perm.callType === undefined || typeof perm.callType !== "number") {
@@ -261,14 +349,153 @@ function validateCallPolicyPermissions(permissions: any[]): string | null {
     if (!perm.selector || typeof perm.selector !== "string") {
       return `permissions[${i}].selector is required and must be a 4-byte hex string`;
     }
-    if (perm.valueLimit === undefined || perm.valueLimit === null) {
-      return `permissions[${i}].valueLimit is required and must be a string or number`;
-    }
-    if (perm.decimals !== undefined && typeof perm.decimals !== "number") {
-      return `permissions[${i}].decimals must be a number if provided`;
+    if (perm.delegatedKey && typeof perm.delegatedKey !== "string") {
+      return `permissions[${i}].delegatedKey must be a valid Ethereum address if provided`;
     }
   }
   return null;
+}
+
+function validateCallPolicyConfig(config?: CallPolicyConfigInput): string | null {
+  if (!config) {
+    return "callPolicyConfig is required for callpolicy keyType";
+  }
+  if (!Array.isArray(config.tokenLimits) || config.tokenLimits.length === 0) {
+    return "callPolicyConfig.tokenLimits must be a non-empty array";
+  }
+  if (!Array.isArray(config.recipients) || config.recipients.length === 0) {
+    return "callPolicyConfig.recipients must be a non-empty array of addresses";
+  }
+
+  for (let i = 0; i < config.tokenLimits.length; i++) {
+    const limit = config.tokenLimits[i];
+    if (!limit?.token || typeof limit.token !== "string") {
+      return `tokenLimits[${i}].token is required`;
+    }
+    if (limit.txLimit === undefined || limit.txLimit === null) {
+      return `tokenLimits[${i}].txLimit is required`;
+    }
+    if (limit.dailyLimit === undefined || limit.dailyLimit === null) {
+      return `tokenLimits[${i}].dailyLimit is required`;
+    }
+  }
+
+  return null;
+}
+
+function normalizeTokenLimits(limits?: TokenLimitInput[]): NormalizedTokenLimit[] {
+  if (!Array.isArray(limits)) return [];
+  const seen = new Set<string>();
+  const result: NormalizedTokenLimit[] = [];
+
+  for (const limit of limits) {
+    if (!limit?.token || typeof limit.token !== "string") continue;
+    const lower = limit.token.toLowerCase();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(lower)) continue;
+    if (seen.has(lower)) continue;
+
+    const decimals = typeof limit.decimals === "number" ? limit.decimals : 18;
+    try {
+      const txLimit = parseUnits(limit.txLimit?.toString() ?? "0", decimals);
+      const dailyLimit = parseUnits(limit.dailyLimit?.toString() ?? "0", decimals);
+      result.push({
+        token: lower as Address,
+        txLimit,
+        dailyLimit,
+        enabled: limit.enabled !== false,
+      });
+      seen.add(lower);
+    } catch (error) {
+      console.warn("[CallPolicy] Failed to normalize token limit", limit, error);
+      continue;
+    }
+  }
+
+  return result;
+}
+
+function normalizeRecipients(recipients?: string[]): Address[] {
+  if (!Array.isArray(recipients)) return [];
+  const seen = new Set<string>();
+  const result: Address[] = [];
+
+  for (const recipient of recipients) {
+    if (!recipient || typeof recipient !== "string") continue;
+    const lower = recipient.toLowerCase();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(lower)) continue;
+    if (seen.has(lower)) continue;
+
+    seen.add(lower);
+    result.push(lower as Address);
+  }
+
+  return result;
+}
+
+function extractCallPolicyPayload(
+  permissionsInput: any,
+  callPolicyConfig: CallPolicyConfigInput | undefined,
+  delegatedEOA: string
+): NormalizedCallPolicyPayload {
+  const collectedPermissions: CallPolicyPermission[] = [];
+  const tokenLimitInputs: TokenLimitInput[] = [];
+  const recipientsSet = new Set<string>();
+
+  const maybeAddRecipient = (addr?: string) => {
+    if (addr && typeof addr === "string") {
+      recipientsSet.add(addr);
+    }
+  };
+
+  // RequestCreateDelegateKey shape: { permissions: PermissionTokenEntry[] }
+  if (permissionsInput?.permissions && Array.isArray(permissionsInput.permissions)) {
+    for (const entry of permissionsInput.permissions) {
+      const perm = entry?.permission ?? entry;
+      if (!perm) continue;
+
+      collectedPermissions.push({
+        callType: Number(perm.callType) || 0,
+        target: perm.target as `0x${string}`,
+        delegatedKey: (perm.delegatedKey || delegatedEOA) as `0x${string}`,
+        selector: (perm.selector === "0x" ? "0x00000000" : perm.selector) as `0x${string}`,
+        rules: (perm.rules || []).map((rule: any) => ({
+          condition: Number(rule.condition) || 0,
+          offset: BigInt(rule.offset ?? 0),
+          params: (rule.params || []) as `0x${string}`[],
+        })),
+      });
+
+      maybeAddRecipient(perm.target);
+
+      const tle = entry?.tokenLimitEntry;
+      if (tle?.token && tle.limit) {
+        tokenLimitInputs.push({
+          token: tle.token,
+          txLimit: tle.limit.txLimit ?? "0",
+          dailyLimit: tle.limit.dailyLimit ?? "0",
+          decimals: tle.limit.decimals,
+          enabled: tle.limit.enabled !== false,
+        });
+      }
+    }
+  } else if (Array.isArray(permissionsInput)) {
+    collectedPermissions.push(...convertToCallPolicyPermissions(permissionsInput, delegatedEOA));
+    permissionsInput.forEach((perm: any) => maybeAddRecipient(perm?.target));
+  }
+
+  // Merge explicit config recipients/token limits
+  if (Array.isArray(callPolicyConfig?.recipients)) {
+    callPolicyConfig.recipients.forEach((r) => maybeAddRecipient(r));
+  }
+  if (Array.isArray(callPolicyConfig?.tokenLimits)) {
+    tokenLimitInputs.push(...callPolicyConfig.tokenLimits);
+  }
+
+  return {
+    callPolicyPermissions: collectedPermissions,
+    tokenLimits: normalizeTokenLimits(tokenLimitInputs),
+    recipients: normalizeRecipients(Array.from(recipientsSet)),
+  };
 }
 
 // Asynchronous installation process for delegated keys
@@ -277,7 +504,9 @@ async function performDelegatedKeyInstallation(
   delegatedEOA: string,
   keyType: "sudo" | "restricted" | "callpolicy",
   clientId?: string,
-  permissions?: any[]
+  callPolicyPermissionsArg?: CallPolicyPermission[],
+  normalizedTokenLimits: NormalizedTokenLimit[] = [],
+  normalizedRecipients: Address[] = []
 ): Promise<void> {
   const sendStatus = (status: InstallationStatus) => {
     console.log(`[Installation ${installationId}] Status:`, status);
@@ -288,6 +517,21 @@ async function performDelegatedKeyInstallation(
     //   wsService.broadcastToAll(status);
     // }
   };
+
+  const tokenLimits: NormalizedTokenLimit[] = keyType === "callpolicy" ? normalizedTokenLimits : [];
+  const recipients: Address[] = keyType === "callpolicy" ? normalizedRecipients : [];
+
+  console.log("***".repeat(30));
+  console.log("***".repeat(30));
+  console.log("***".repeat(30));
+  console.log("tokenLimits:");
+  console.log(tokenLimits);
+  console.log("***".repeat(30));
+  console.log("***".repeat(30));
+    console.log("recipients:");
+  console.log(recipients);
+  console.log("***".repeat(30));
+
 
   try {
     sendStatus({
@@ -301,7 +545,14 @@ async function performDelegatedKeyInstallation(
     let vId: string;
 
     if (keyType === "callpolicy") {
-      const callPolicyPermissions = convertToCallPolicyPermissions(permissions!);
+      const callPolicyPermissions = callPolicyPermissionsArg ?? [];
+
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
+      console.log("callPolicyPermissions:");
+      console.log(callPolicyPermissions);
+      console.log("***".repeat(30));
+      console.log("***".repeat(30));
 
       logCallPolicySummary(delegatedEOA, callPolicyPermissions);
 
@@ -309,7 +560,12 @@ async function performDelegatedKeyInstallation(
         delegatedEOA as `0x${string}`,
         callPolicyPermissions
       );
+      console.log("****".repeat(20));
+      console.log("SendUserOpV07");
       ({ txHash: installTxHash } = await sendUserOpV07(installUO));
+      console.log("^^^^^".repeat(20));
+      console.log("^^^^^".repeat(20));
+      console.log("^^^^^".repeat(20));
       permissionId = permId;
       vId = vid;
     } else {
@@ -403,6 +659,115 @@ async function performDelegatedKeyInstallation(
 
     console.log(`[Installation ${installationId}] Grant tx:`, grantTxHash);
 
+    if (keyType === "callpolicy" && (tokenLimits.length > 0 || recipients.length > 0)) {
+      sendStatus({
+          step: "installing",
+          message: "Applying CallPolicy token and recipient limits...",
+          progress: 80,
+        });
+
+
+      // Apply token limits and recipient restrictions
+      if (recipients.length > 0) {
+        const recipientList = recipients;
+        const allowedList = recipients.map(() => true);
+
+        const { unpacked } = await buildSetRecipientAllowedUO(
+          permissionId as `0x${string}`,
+          KERNEL,
+          recipientList,
+          allowedList
+        );
+
+        await sendUserOpV07(unpacked);
+      }
+
+
+      // Set token limits in batch
+      console.log("***".repeat(30))
+      console.log("***".repeat(30))
+      console.log("Set token limits in batch:")
+      console.log(tokenLimits)
+      console.log("***".repeat(30))
+      console.log("***".repeat(30))
+      if (tokenLimits.length > 0) {
+        const tokens = tokenLimits.map(t => t.token);
+        const enabled = tokenLimits.map(t => t.enabled);
+        const txLimits = tokenLimits.map(t => t.txLimit);
+        const dailyLimits = tokenLimits.map(t => t.dailyLimit);
+
+        const { unpacked } = await buildSetTokenLimitUO(
+          permissionId as `0x${string}`,
+          KERNEL,
+          tokens,
+          enabled,
+          txLimits,
+          dailyLimits
+        );
+
+        console.log("***".repeat(30))
+        console.log("SEEEEEEEEEND")
+        console.log("***".repeat(30))
+
+        await sendUserOpV07(unpacked);
+      }
+
+      // Best-effort verification and remediation to ensure limits/recipients are actually stored on-chain
+      try {
+        const currentTokens = await getAllowedTokens(KERNEL, permissionId as `0x${string}`);
+        const currentRecipients = await getAllowedRecipients(KERNEL, permissionId as `0x${string}`);
+
+        const missingTokens = tokenLimits.filter(
+          (tl) => !currentTokens.some((ct) => ct.token.toLowerCase() === tl.token.toLowerCase())
+        );
+        const missingRecipients = recipients.filter(
+          (r) => !currentRecipients.some((cr) => cr.toLowerCase() === r.toLowerCase())
+        );
+
+        if (missingRecipients.length > 0) {
+          console.log("[CallPolicy] Re-applying missing recipients:", missingRecipients);
+          const allowedList = missingRecipients.map(() => true);
+          const { unpacked } = await buildSetRecipientAllowedUO(
+            permissionId as `0x${string}`,
+            KERNEL,
+            missingRecipients,
+            allowedList
+          );
+          await sendUserOpV07(unpacked);
+        }
+
+        if (missingTokens.length > 0) {
+          console.log("[CallPolicy] Re-applying missing token limits:", missingTokens);
+          const tokens = missingTokens.map((t) => t.token);
+          const enabled = missingTokens.map((t) => t.enabled);
+          const txLimits = missingTokens.map((t) => t.txLimit);
+          const dailyLimits = missingTokens.map((t) => t.dailyLimit);
+
+          const { unpacked } = await buildSetTokenLimitUO(
+            permissionId as `0x${string}`,
+            KERNEL,
+            tokens,
+            enabled,
+            txLimits,
+            dailyLimits
+          );
+          await sendUserOpV07(unpacked);
+        }
+
+        const finalTokens = await getAllowedTokens(KERNEL, permissionId as `0x${string}`);
+        const finalRecipients = await getAllowedRecipients(KERNEL, permissionId as `0x${string}`);
+        if (recipients.length > 0 && finalRecipients.length === 0) {
+          throw new Error("CallPolicy recipients not persisted on-chain");
+        }
+        if (tokenLimits.length > 0 && finalTokens.length === 0) {
+          throw new Error("CallPolicy token limits not persisted on-chain");
+        }
+      } catch (verifyErr) {
+        console.warn("[CallPolicy] Verification of limits/recipients failed:", verifyErr);
+        throw verifyErr;
+      }
+    }
+
     const keyTypeDisplay = keyType === "sudo" ? "Sudo" : "CallPolicy";
     sendStatus({
       step: "completed",
@@ -455,13 +820,19 @@ function logCallPolicySummary(delegatedEOA: string, permissions: CallPolicyPermi
 
   const uniqueTargets = [...new Set(permissions.map((p) => p.target))];
   const uniqueSelectors = [...new Set(permissions.map((p) => p.selector))];
+  const uniqueDelegatedKeys = [...new Set(permissions.map((p) => p.delegatedKey))];
 
   console.log("\n🎯 ALLOWED TARGET ADDRESSES:");
   uniqueTargets.forEach((target, index) => {
     console.log(`   ${index + 1}. ${target}`);
   });
 
-  console.log("\n ALLOWED FUNCTION SELECTORS:");
+  console.log("\n👤 Delegated keys in payload:");
+  uniqueDelegatedKeys.forEach((dk, index) => {
+    console.log(`   ${index + 1}. ${dk}`);
+  });
+
+  console.log("\nALLOWED FUNCTION SELECTORS:");
   uniqueSelectors.forEach((selector, index) => {
     const actionName = selector === "0x00000000"
       ? "ETH Transfer"
@@ -504,28 +875,17 @@ function logCallPolicySummary(delegatedEOA: string, permissions: CallPolicyPermi
                 : perm.selector === "0x2e17de78"
                   ? "Unstake"
                   : perm.selector === "0x379607f5"
-                    ? "Claim Rewards"
-                    : perm.selector === "0x47e7ef24"
-                      ? "Deposit"
-                      : perm.selector === "0x2e1a7d4d"
-                        ? "Withdraw"
-                        : "Unknown";
-    const decimals = perm.decimals ?? 18;
-    const divisor = 10n ** BigInt(decimals);
-    const formatAmount = (val: bigint) => {
-      const whole = val / divisor;
-      const fraction = val % divisor;
-      if (fraction === 0n) return whole.toString();
-      return `${whole}.${fraction.toString().padStart(decimals, "0")}`.replace(/0+$/, "").replace(/\.$/, "");
-    };
-    const formattedValue = formatAmount(perm.valueLimit);
-    const formattedDaily = formatAmount(perm.dailyLimit);
+          ? "Claim Rewards"
+          : perm.selector === "0x47e7ef24"
+            ? "Deposit"
+            : perm.selector === "0x2e1a7d4d"
+              ? "Withdraw"
+              : "Unknown";
     console.log(`   ${index + 1}. ${actionName}`);
     console.log(`      Target: ${perm.target}`);
+    console.log(`      Delegated Key: ${perm.delegatedKey}`);
     console.log(`      Selector: ${perm.selector}`);
-    console.log(`      Value Limit: ${formattedValue} (decimals: ${decimals})`);
-    console.log(`      Daily Limit: ${formattedDaily} (decimals: ${decimals})`);
-    console.log(`      Rules: ${perm.rules.length > 0 ? JSON.stringify(perm.rules, null, 8) : "None"}`);
+    console.log(`      Rules: ${perm.rules.length > 0 ? JSON.stringify(perm.rules, null, 2) : "None"}`);
     console.log("");
   });
   console.log("🔒 ===========================================\n");
