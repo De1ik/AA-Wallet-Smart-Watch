@@ -48,10 +48,9 @@ export const callPolicyAbi = [
   {
     inputs: [
       { name: "wallet", type: "address" },
-      { name: "id", type: "bytes32" },
     ],
-    name: "delegatedKeys",
-    outputs: [{ name: "", type: "address" }],
+    name: "delegatedKeysList",
+    outputs: [{ name: "", type: "address[]" }],
     stateMutability: "view",
     type: "function",
   },

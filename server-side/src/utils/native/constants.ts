@@ -25,7 +25,8 @@ export const SUDO_POLICY: Address = "0x67b436caD8a6D025DF6C82C5BB43fbF11fC5B9B7"
 // export const CALL_POLICY: Address = "0x715694426fA58D76EC00CB803af84ff6D6Cbe415"; // CallPolicy_v1
 // export const CALL_POLICY: Address = "0x493270eDC9b725B1519Ccc52E9347ea2dcA9D0Bf"; // CallPolicy_v2_old
 // export const CALL_POLICY: Address = "0x64bc09827E93cE6C7Ed353f2B48c81d7CeaCF805"; // CallPolicy_v2
-export const CALL_POLICY: Address = "0x37e90150a6d663b75632E85e7b9Ea6C5895685Ec"; // CallPolicy_v3
+// export const CALL_POLICY: Address = "0x37e90150a6d663b75632E85e7b9Ea6C5895685Ec"; // CallPolicy_v3
+export const CALL_POLICY: Address = "0x632b00A0B72C6929694C40A59a64D37EBA80FeAf"; // CallPolicy_v3
 
 export const HOOK_SENTINEL: Address = "0x0000000000000000000000000000000000000001";
 

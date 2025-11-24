@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, InstallationStatus, removeStuckInstallations, clearAllDelegatedKeys, updateDelegatedKey } from '@/utils/delegatedKeys';
+import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, removeStuckInstallations, clearAllDelegatedKeys, updateDelegatedKey, saveDelegatedKey } from '@/utils/delegatedKeys';
 import { apiClient } from '@/utils/apiClient';
 import { installationState, GlobalInstallationState } from '@/utils/installationState';
 import { getKernelAddress } from '@/utils/config';
@@ -283,54 +283,82 @@ export default function SmartWatchScreen() {
       setIsSyncingKeys(true);
       const kernelAddress = getKernelAddress() || '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
       const storedKeys = await getDelegatedKeysStorage();
+      const storedMap = new Map(storedKeys.map(k => [k.publicAddress.toLowerCase(), k]));
 
-      if (!storedKeys.length) {
-        Alert.alert('Info', 'No delegated keys found locally to refresh.');
+      // Fetch all delegated keys from contract via backend
+      const contractKeysRes = await apiClient.fetchAllDelegatedKeys({ owner: kernelAddress });
+      const contractKeys: string[] = contractKeysRes?.allDelegatedKeys ?? [];
+
+      // If on-chain says there are no delegated keys, treat it as the single source of truth:
+      // wipe local cache and UI state.
+      if (!contractKeys || contractKeys.length === 0) {
+        await clearAllDelegatedKeys();
+        setConnectedDevices([]);
+        setOngoingInstallation(null);
+        showToast('No delegated keys found on-chain. Local cache cleared.', true);
         return;
       }
 
       const refreshedDevices: DelegatedKeyData[] = [];
 
-      for (const key of storedKeys) {
+      // Refresh existing and add new
+      for (const delegatedKey of contractKeys) {
+        const lower = delegatedKey.toLowerCase();
+        const existing = storedMap.get(lower);
         try {
           const res = await apiClient.fetchCallPolicyPermissions({
             owner: kernelAddress,
-            delegatedKey: key.publicAddress,
+            delegatedKey,
           });
 
-          if (res?.success && res.data) {
-            const tokenLimits =
-              res.data.allowedTokens?.map((t: any) => ({
-                tokenAddress: t.token,
-                tokenSymbol: t.symbol || 'TOKEN',
-                maxAmountPerTx: t.txLimit,
-                maxAmountPerDay: t.dailyLimit,
-              })) ?? key.tokenLimits;
+          const tokenLimits =
+            res?.data?.allowedTokens?.map((t: any) => ({
+              tokenAddress: t.token,
+              tokenSymbol: t.symbol || 'TOKEN',
+              maxAmountPerTx: t.txLimit,
+              maxAmountPerDay: t.dailyLimit,
+            })) ?? existing?.tokenLimits;
 
-            const updated: DelegatedKeyData = {
-              ...key,
-              deviceName: key.deviceName || `Device ${key.publicAddress.slice(2, 6)}`,
-              tokenLimits,
-              whitelistAddresses: res.data.allowedRecipients ?? key.whitelistAddresses,
-              installationStatus: res.data.isActive ? 'completed' : key.installationStatus,
-            };
+          const updated: DelegatedKeyData = {
+            id: existing?.id ?? Date.now().toString(),
+            deviceName: existing?.deviceName || `Delegated key ${delegatedKey.slice(2, 6)}`,
+            keyType: existing?.keyType ?? 'restricted',
+            permissionId: existing?.permissionId ?? '',
+            vId: existing?.vId ?? '',
+            publicAddress: delegatedKey,
+            createdAt: existing?.createdAt ?? new Date().toISOString(),
+            whitelistAddresses: res?.data?.allowedRecipients ?? existing?.whitelistAddresses,
+            tokenLimits,
+            installationStatus: res?.data?.isActive ? 'completed' : existing?.installationStatus ?? 'completed',
+          };
 
-            await updateDelegatedKey(key.id, updated);
-            refreshedDevices.push(updated);
+          if (existing) {
+            await updateDelegatedKey(existing.id, updated);
           } else {
-            refreshedDevices.push(key);
+            await saveDelegatedKey(updated);
           }
+          refreshedDevices.push(updated);
         } catch (err) {
-          console.warn('[Sync Keys] Failed to refresh key', key.publicAddress, err);
-          refreshedDevices.push(key);
+          console.warn('[Sync Keys] Failed to refresh key', delegatedKey, err);
+          if (existing) {
+            refreshedDevices.push(existing);
+          }
         }
       }
 
-      setConnectedDevices(refreshedDevices.filter(k => k.installationStatus !== 'installing' && k.installationStatus !== 'granting'));
+      // Persist only the on-chain set (remove any stale locally stored keys)
+      await clearAllDelegatedKeys();
+      for (const dev of refreshedDevices) {
+        await saveDelegatedKey(dev);
+      }
+
+      setConnectedDevices(
+        refreshedDevices.filter(k => k.installationStatus !== 'installing' && k.installationStatus !== 'granting')
+      );
       setOngoingInstallation(
         refreshedDevices.find(k => k.installationStatus === 'installing' || k.installationStatus === 'granting') || null
       );
-      Alert.alert('Success', 'Delegated keys refreshed from contract.');
+      showToast('Delegated keys refreshed', true);
     } catch (error: any) {
       console.error('[Sync Keys] Error:', error);
       Alert.alert('Error', error?.message || 'Failed to refresh delegated keys from contract.');

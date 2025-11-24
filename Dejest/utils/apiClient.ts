@@ -202,6 +202,14 @@ class ApiClient {
     });
   }
 
+  // Fetch all delegated keys for an owner (kernel)
+  async fetchAllDelegatedKeys(params: { owner: string }): Promise<{ success: boolean; allDelegatedKeys: string[] }> {
+    return this.makeRequest('/wallet/callpolicy/delegated-keys', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
   async depositToEntryPoint(amountEth: string): Promise<EntryPointDepositResponse> {
     return this.makeRequest<EntryPointDepositResponse>('/wallet/entrypoint/deposit', {
       method: 'POST',

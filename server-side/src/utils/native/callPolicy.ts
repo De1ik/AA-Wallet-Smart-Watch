@@ -26,21 +26,20 @@ export function getCurrentDay(): number {
 /**
  * Get delegated key address for specific policy ID
  */
-export async function getDelegatedKey(wallet: Address, policyId: Hex): Promise<Address> {
+export async function getAllDelegatedKeys(wallet: Address): Promise<Address[]> {
   try {
-    const policyId32 = padPolicyId(policyId);
 
     const delegatedKey = (await publicClient.readContract({
       address: CALL_POLICY,
       abi: callPolicyAbi,
-      functionName: "delegatedKeys",
-      args: [wallet, policyId32],
-    })) as Address;
+      functionName: "delegatedKeysList",
+      args: [wallet],
+    })) as Address[];
 
     return delegatedKey;
   } catch (error) {
     console.error("[CallPolicy] Error getting delegated key:", error);
-    return "0x0000000000000000000000000000000000000000" as Address;
+    return [] as Address[];
   }
 }
 
@@ -469,10 +468,9 @@ export async function getAllowedRecipients(wallet: Address, policyId: Hex): Prom
 /**
  * Get complete delegated key information
  */
-export async function getDelegatedKeyInfo(wallet: Address, policyId: Hex) {
+export async function getDelegatedKeyInfo(wallet: Address, policyId: Hex, delegatedKey: Address) {
   try {
-    const [delegatedKey, status, tokens, recipients] = await Promise.all([
-      getDelegatedKey(wallet, policyId),
+    const [status, tokens, recipients] = await Promise.all([
       getPolicyStatus(wallet, policyId),
       getAllowedTokens(wallet, policyId),
       getAllowedRecipients(wallet, policyId),

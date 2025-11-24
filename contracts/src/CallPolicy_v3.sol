@@ -80,8 +80,9 @@ contract CallPolicy is PolicyBase {
     // [wallet][id] -> Status
     mapping(address => mapping(bytes32 => Status)) public status;
 
-    // [wallet][id] -> delegatedKey
-    mapping(address => mapping(bytes32 => address)) public delegatedKeys;
+    // [wallet] -> delegatedKey
+    mapping(address => address[]) internal delegatedKeys;
+    mapping(address => mapping(address => uint256)) private delegatedKeyIndex;
 
     // [wallet][id][permissionHash] -> StoredPermission
     mapping(address => mapping(bytes32 => mapping(bytes32 => StoredPermission))) public storedPermissions;
@@ -182,7 +183,7 @@ contract CallPolicy is PolicyBase {
         if (delegatedKey == address(0)) revert InvalidDelegatedKey();
 
         // Save delegated key
-        delegatedKeys[msg.sender][id] = delegatedKey;
+        _addDelegatedKey(msg.sender, delegatedKey);
 
         for (uint256 i; i < permissions.length; ++i) {
             if (permissions[i].delegatedKey != delegatedKey) revert InconsistentDelegatedKey();
@@ -191,8 +192,7 @@ contract CallPolicy is PolicyBase {
                 abi.encodePacked(
                     permissions[i].callType,
                     permissions[i].target,
-                    permissions[i].selector,
-                    delegatedKey
+                    permissions[i].selector
                 )
             );
 
@@ -318,18 +318,43 @@ contract CallPolicy is PolicyBase {
         for (uint256 i; i < length; ++i) {
             bytes32 permissionHash = hashes[i];
             if (storedPermissions[msg.sender][id][permissionHash].exists) {
+                address delegatedKey = storedPermissions[msg.sender][id][permissionHash].delegatedKey;
+                _removeDelegatedKey(msg.sender, delegatedKey);
                 delete storedPermissions[msg.sender][id][permissionHash];
                 emit PermissionRemoved(id, msg.sender, permissionHash);
             }
         }
         
         delete permissionHashes[msg.sender][id];
-        delete delegatedKeys[msg.sender][id];
         status[msg.sender][id] = Status.Deprecated;
     }
 
     // ---------------- INTERNAL HELPERS ----------------
 
+    function _addDelegatedKey(address wallet, address key) internal {
+        // prevent duplicates
+        if (delegatedKeyIndex[wallet][key] != 0) return;
+
+        delegatedKeys[wallet].push(key);
+        delegatedKeyIndex[wallet][key] = delegatedKeys[wallet].length; // index + 1
+    }
+
+    function _removeDelegatedKey(address wallet, address key) internal {
+        uint256 idxPlusOne = delegatedKeyIndex[wallet][key];
+        if (idxPlusOne == 0) return; // not found
+
+        uint256 idx = idxPlusOne - 1;
+        uint256 lastIdx = delegatedKeys[wallet].length - 1;
+        address lastKey = delegatedKeys[wallet][lastIdx];
+
+        // swap and pop
+        delegatedKeys[wallet][idx] = lastKey;
+        delegatedKeyIndex[wallet][lastKey] = idx + 1;
+        delegatedKeys[wallet].pop();
+
+        delete delegatedKeyIndex[wallet][key];
+    }
+    
     function _removeToken(bytes32 id, address wallet, address token) internal {
         uint256 idxPlus = tokenIndexPlusOne[wallet][id][token];
         if (idxPlus == 0) return;
@@ -511,14 +536,13 @@ contract CallPolicy is PolicyBase {
         uint256 value
     ) internal returns (bool) {
         bytes4 selector = data.length >= 4 ? bytes4(data[0:4]) : bytes4(0);
-        address delegatedKey = delegatedKeys[wallet][id];
         
-        bytes32 permissionHash = keccak256(abi.encodePacked(callType, target, selector, delegatedKey));
+        bytes32 permissionHash = keccak256(abi.encodePacked(callType, target, selector));
         StoredPermission storage sp = storedPermissions[wallet][id][permissionHash];
 
         // Try wildcard if exact permission not found
         if (!sp.exists) {
-            bytes32 wildcardHash = keccak256(abi.encodePacked(callType, address(0), selector, delegatedKey));
+            bytes32 wildcardHash = keccak256(abi.encodePacked(callType, address(0), selector));
             sp = storedPermissions[wallet][id][wildcardHash];
             if (!sp.exists) revert InvalidCallData();
         }
@@ -580,5 +604,11 @@ contract CallPolicy is PolicyBase {
     {
         if (status[msg.sender][id] != Status.Live) revert NotLive();
         return 0;
+    }
+
+    // ---------------- VIEW HELPERS ----------------
+
+    function delegatedKeysList(address wallet) external view returns (address[] memory) {
+        return delegatedKeys[wallet];
     }
 }

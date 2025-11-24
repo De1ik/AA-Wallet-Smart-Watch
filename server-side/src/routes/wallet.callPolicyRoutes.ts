@@ -14,7 +14,9 @@ import {
   getPermissionId,
   getCurrentDay,
   decodePermissionHash,
+  getAllDelegatedKeys,
 } from "../utils/native-code";
+import { Address } from "viem";
 
 const TOKEN_METADATA = [
   {
@@ -87,14 +89,14 @@ export function registerCallPolicyRoutes(router: Router): void {
       }
 
       const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
-      const info = await getDelegatedKeyInfo(owner, policyId);
+      const info = await getDelegatedKeyInfo(owner, policyId, delegatedKey);
 
       if (!info) {
         return res.status(404).json({ success: false, error: "Policy not found" });
       }
 
       const tokensWithUsage = await Promise.all(
-        info.allowedTokens.map(async (t) => {
+        info.allowedTokens.map(async (t: any) => {
           const meta = findTokenMeta(t.token);
           let usage: null | {
             used: string;
@@ -149,6 +151,26 @@ export function registerCallPolicyRoutes(router: Router): void {
       });
     } catch (err: any) {
       console.error("[POST /callpolicy/info] error:", err);
+      return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
+    }
+  });
+
+  // get policy status
+  router.post("/callpolicy/delegated-keys", async (req: Request, res: Response) => {
+    try {
+      const { owner } = req.body;
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
+      }
+
+      const allDelegatedKeys: Address[] = await getAllDelegatedKeys(owner);
+
+      return res.json({
+        success: true,
+        allDelegatedKeys
+      });
+    } catch (err: any) {
+      console.error("[POST /callpolicy/delegated-keys] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
