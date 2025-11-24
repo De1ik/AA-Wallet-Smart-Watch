@@ -54,3 +54,180 @@ export interface AllPermissionsPerDelegatedKey {
 export interface RequestCreateDelegateKey {
     permissions: PermissionTokenEntry[]
 }
+
+
+// ---------------- API Response types ----------------
+
+export interface AllowedToken {
+  token: string;
+  symbol?: string;
+  name?: string;
+  decimals?: number;
+  enabled: boolean;
+  txLimit: string;
+  dailyLimit: string;
+  usage?: {
+    used: string;
+    limit: string;
+    remaining: string;
+    percentage: number;
+  } | null;
+}
+
+export interface CallPolicyData {
+  delegatedKey: string;
+  status: number;
+  statusText: string;
+  isActive: boolean;
+  allowedTokens: AllowedToken[];
+  allowedRecipients: string[];
+}
+
+export interface CallPolicyResponse {
+  success: boolean;
+  delegatedEOA: string;
+  policyId: string;
+  data: CallPolicyData;
+}
+
+
+// ---------------- API Response types ----------------
+
+export interface ApiResponse<T = any> {
+  success?: boolean;
+  error?: string;
+  data?: T;
+}
+
+export interface NonceResponse {
+  nonce: string;
+}
+
+export interface InstallPermissionResponse {
+  permissionId: string;
+  vId: string;
+  txHash: string;
+}
+
+export interface EnableSelectorResponse {
+  txHash: string;
+}
+
+export interface GrantAccessResponse {
+  txHash: string;
+}
+
+export interface UninstallPermissionResponse {
+  permissionId: string;
+  vId: string;
+  txHash: string;
+}
+
+export interface UserOpPrepareResponse {
+  userOpHash: string;
+  echo: {
+    permissionId: string;
+    to: string;
+    amountWei: string;
+    data: string;
+  };
+}
+
+export interface UserOpBroadcastResponse {
+  txHash: string;
+}
+
+export interface InstallationStatus {
+  step: 'installing' | 'granting' | 'completed' | 'failed';
+  message: string;
+  progress: number; // 0-100
+  txHash?: string;
+  error?: string;
+  permissionId?: string;
+  vId?: string;
+}
+
+export interface CreateDelegatedKeyResponse {
+  success: boolean;
+  installationId: string;
+  message: string;
+}
+
+export interface PrefundCheckResponse {
+  hasPrefund: boolean;
+  message: string;
+  error?: string;
+  details?: string;
+  depositWei?: string;
+  requiredPrefundWei?: string;
+  shortfallWei?: string;
+  kernelAddress?: string;
+  entryPointAddress?: string;
+}
+
+export interface EntryPointDepositResponse {
+  success: boolean;
+  txHash?: string;
+  userOpHash?: string;
+  message: string;
+  error?: string;
+  kernelAddress?: string;
+  entryPointAddress?: string;
+  amountWei?: string;
+  gasUsed?: string;
+  revertReason?: string;
+  details?: string;
+}
+
+export interface RevokeKeyResponse {
+  success: boolean;
+  txHash: string;
+  message: string;
+}
+
+export interface TokenBalance {
+  symbol: string;
+  name: string;
+  balance: string;
+  value: number;
+  decimals: number;
+  address: string;
+  color: string;
+  amount: string;
+}
+
+export interface BalancesResponse {
+  success: boolean;
+  ethBalance: string;
+  tokens: TokenBalance[];
+  message: string;
+}
+
+export interface Transaction {
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  timestamp: number;
+  type: 'sent' | 'received';
+  status: 'success' | 'pending' | 'failed';
+  tokenSymbol?: string;
+  tokenAddress?: string;
+  eventType?: string;
+  errorMessage?: string;
+  tokenId?: string; // For NFTs
+}
+
+export interface TransactionsResponse {
+  success: boolean;
+  transactions: Transaction[];
+  message: string;
+  limit: number;
+}
+
+export interface SendTransactionResponse {
+  success: boolean;
+  txHash: string;
+  message: string;
+  error?: string;
+}

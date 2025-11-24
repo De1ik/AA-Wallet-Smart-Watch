@@ -144,9 +144,9 @@ export function buildPermissionUserOpSig(delegatedSig65: Hex, policiesCount = 1)
   return ("0x" + policyPrefix + "ff" + delegatedSig65.slice(2)) as Hex;
 }
 
-export function getPermissionId(delegatedEOA: Address) {
+export function getPermissionId(kernel: Address, delegatedEOA: Address) {
   const permissionId = (keccak256(
-    encodeAbiParameters([{ type: "address" }, { type: "address" }], [KERNEL, delegatedEOA])
+    encodeAbiParameters([{ type: "address" }, { type: "address" }], [kernel, delegatedEOA])
   ) as Hex).slice(0, 10) as Hex;
   return permissionId;
 }

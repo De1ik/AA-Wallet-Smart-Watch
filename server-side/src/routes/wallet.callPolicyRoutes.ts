@@ -1,8 +1,5 @@
 import type { Request, Response, Router } from "express";
-import { Hex, pad } from "viem";
-
 import {
-  getDelegatedKey,
   getPolicyStatus,
   getCallPolicyPermissionsCount,
   getCallPolicyPermissionByIndex,
@@ -14,15 +11,52 @@ import {
   getTokenDailyUsageInfo,
   isRecipientAllowed,
   getDelegatedKeyInfo,
-  getAllCallPolicyPermissionsWithUsage,
   getPermissionId,
-  getVId,
   getCurrentDay,
   decodePermissionHash,
 } from "../utils/native-code";
-import { CALL_POLICY, KERNEL } from "../utils/native/constants";
-import { publicClient } from "../utils/native/clients";
-import { callPolicyAbi } from "../utils/native/abi";
+
+const TOKEN_METADATA = [
+  {
+    address: "0x0000000000000000000000000000000000000000",
+    symbol: "ETH",
+    name: "Ether",
+    decimals: 18,
+  },
+  {
+    address: "0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357",
+    symbol: "DAI",
+    name: "Dai Stablecoin",
+    decimals: 18,
+  },
+  {
+    address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+    symbol: "UNI",
+    name: "Uniswap",
+    decimals: 18,
+  },
+  {
+    address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
+    symbol: "WETH",
+    name: "Wrapped Ether",
+    decimals: 18,
+  },
+  {
+    address: "0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0",
+    symbol: "USDT",
+    name: "Tether USD",
+    decimals: 6,
+  },
+  {
+    address: "0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8",
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+  },
+];
+
+const findTokenMeta = (addr: string) =>
+  TOKEN_METADATA.find((t) => t.address.toLowerCase() === addr.toLowerCase());
 
 // Helper function to validate Ethereum address
 function isValidAddress(address: string): boolean {
@@ -38,147 +72,165 @@ export function registerCallPolicyRoutes(router: Router): void {
   
   // ---------------- BASIC POLICY INFO ----------------
   
-  /**
-   * GET /callpolicy/:delegatedEOA/info
-   * Get complete delegated key information
-   */
-  router.get("/callpolicy/:delegatedEOA/info", async (req: Request, res: Response) => {
+  // get complete delegated key information
+  router.post("/callpolicy/info", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey } = req.body;
+      
+      // verify correctness of owner and delegatedKey addresses
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
+      }
+      
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const info = await getDelegatedKeyInfo(KERNEL, policyId);
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const info = await getDelegatedKeyInfo(owner, policyId);
 
       if (!info) {
         return res.status(404).json({ success: false, error: "Policy not found" });
       }
 
+      const tokensWithUsage = await Promise.all(
+        info.allowedTokens.map(async (t) => {
+          const meta = findTokenMeta(t.token);
+          let usage: null | {
+            used: string;
+            limit: string;
+            remaining: string;
+            percentage: number;
+          } = null;
+
+          try {
+            const usageInfo = await getTokenDailyUsageInfo(
+              owner as `0x${string}`,
+              policyId,
+              t.token as `0x${string}`
+            );
+            if (usageInfo) {
+              usage = {
+                used: usageInfo.used.toString(),
+                limit: usageInfo.limit.toString(),
+                remaining: usageInfo.remaining.toString(),
+                percentage: usageInfo.percentage,
+              };
+            }
+          } catch (err) {
+            usage = null;
+          }
+
+          return {
+            token: t.token,
+            symbol: meta?.symbol ?? "UNKNOWN",
+            name: meta?.name ?? "Unknown Token",
+            decimals: meta?.decimals ?? 18,
+            enabled: t.enabled,
+            txLimit: t.txLimit.toString(),
+            dailyLimit: t.dailyLimit.toString(),
+            usage,
+          };
+        })
+      );
+
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         data: {
           delegatedKey: info.delegatedKey,
           status: info.status,
           statusText: info.status === 0 ? "NA" : info.status === 1 ? "Live" : "Deprecated",
           isActive: info.isActive,
-          allowedTokens: info.allowedTokens.map(t => ({
-            token: t.token,
-            enabled: t.enabled,
-            txLimit: t.txLimit.toString(),
-            dailyLimit: t.dailyLimit.toString(),
-          })),
+          allowedTokens: tokensWithUsage,
           allowedRecipients: info.allowedRecipients,
         },
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/info] error:", err);
+      console.error("[POST /callpolicy/info] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/status
-   * Get policy status
-   */
-  router.get("/callpolicy/:delegatedEOA/status", async (req: Request, res: Response) => {
+  // get policy status
+  router.post("/callpolicy/status", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey } = req.body;
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const status = await getPolicyStatus(KERNEL, policyId);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const status = await getPolicyStatus(owner, policyId);
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         status,
         statusText: status === 0 ? "NA" : status === 1 ? "Live" : "Deprecated",
         isActive: status === 1,
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/status] error:", err);
-      return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
-    }
-  });
-
-  /**
-   * GET /callpolicy/:delegatedEOA/delegated-key
-   * Get delegated key address
-   */
-  router.get("/callpolicy/:delegatedEOA/delegated-key", async (req: Request, res: Response) => {
-    try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
-      }
-
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const delegatedKey = await getDelegatedKey(KERNEL, policyId);
-
-      return res.json({
-        success: true,
-        delegatedEOA,
-        policyId,
-        delegatedKey,
-      });
-    } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/delegated-key] error:", err);
+      console.error("[POST /callpolicy/status] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
   // ---------------- PERMISSIONS ----------------
 
-  /**
-   * GET /callpolicy/:delegatedEOA/permissions-count
-   * Get number of permissions
-   */
-  router.get("/callpolicy/:delegatedEOA/permissions-count", async (req: Request, res: Response) => {
+  // get number of permissions
+  router.post("/callpolicy/permissions-count", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const count = await getCallPolicyPermissionsCount(policyId, KERNEL);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const count = await getCallPolicyPermissionsCount(policyId, owner);
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         count,
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/permissions-count] error:", err);
+      console.error("[POST /callpolicy/permissions-count] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/permissions
-   * Get all permissions
-   */
-  router.get("/callpolicy/:delegatedEOA/permissions", async (req: Request, res: Response) => {
+  // get all permissions
+  router.post("/callpolicy/permissions/all", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const count = await getCallPolicyPermissionsCount(policyId, KERNEL);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const count = await getCallPolicyPermissionsCount(policyId, owner);
       const permissions = [];
 
       for (let i = 0; i < count; i++) {
-        const perm = await getCallPolicyPermissionByIndex(policyId, KERNEL, i);
+        const perm = await getCallPolicyPermissionByIndex(policyId, owner, i);
         if (perm) {
           const decoded = decodePermissionHash(perm.permissionHash, perm.delegatedKey);
           permissions.push({
@@ -199,26 +251,28 @@ export function registerCallPolicyRoutes(router: Router): void {
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         count: permissions.length,
         permissions,
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/permissions] error:", err);
+      console.error("[POST /callpolicy/permissions/all] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/permission/:index
-   * Get permission by index
-   */
-  router.get("/callpolicy/:delegatedEOA/permission/:index", async (req: Request, res: Response) => {
+  // get permission by index
+  router.post("/callpolicy/permissions/index", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA, index } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey, index } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
+      }
+
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
       }
 
       const idx = Number(index);
@@ -226,8 +280,8 @@ export function registerCallPolicyRoutes(router: Router): void {
         return res.status(400).json({ success: false, error: "index must be a non-negative integer" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const perm = await getCallPolicyPermissionByIndex(policyId, KERNEL, idx);
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const perm = await getCallPolicyPermissionByIndex(policyId, owner, idx);
 
       if (!perm) {
         return res.status(404).json({ success: false, error: "Permission not found" });
@@ -236,7 +290,7 @@ export function registerCallPolicyRoutes(router: Router): void {
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         index: idx,
         permission: {
@@ -253,27 +307,29 @@ export function registerCallPolicyRoutes(router: Router): void {
         },
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/permission/:index] error:", err);
+      console.error("[POST /callpolicy/permission/index] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/permission/hash/:permissionHash
-   * Get permission by hash
-   */
-  router.get("/callpolicy/:delegatedEOA/permission/hash/:permissionHash", async (req: Request, res: Response) => {
+  // get permission by hash
+  router.post("/callpolicy/permission/hash", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA, permissionHash } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
-      }
-      if (!isValidBytes32(permissionHash)) {
-        return res.status(400).json({ success: false, error: "Invalid permissionHash (bytes32)" });
+      const { owner, delegatedKey, permissionHash } = req.body;
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const perm = await getStoredPermission(KERNEL, policyId, permissionHash as `0x${string}`);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      if (!isValidBytes32(permissionHash)) {
+        return res.status(400).json({ success: false, error: "Invalid permissionHash format" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const perm = await getStoredPermission(owner, policyId, permissionHash as `0x${string}`);
 
       if (!perm || !perm.exists) {
         return res.status(404).json({ success: false, error: "Permission not found" });
@@ -282,7 +338,7 @@ export function registerCallPolicyRoutes(router: Router): void {
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         permissionHash,
         permission: {
@@ -298,30 +354,31 @@ export function registerCallPolicyRoutes(router: Router): void {
         },
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/permission/hash/:permissionHash] error:", err);
+      console.error("[POST /callpolicy/permission/hash] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
   // ---------------- TOKENS ----------------
 
-  /**
-   * GET /callpolicy/:delegatedEOA/tokens
-   * Get all allowed tokens with limits
-   */
-  router.get("/callpolicy/:delegatedEOA/tokens", async (req: Request, res: Response) => {
+  // get all allowed tokens with limits
+  router.post("/callpolicy/token/all", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey } = req.body;
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const tokens = await getAllowedTokens(KERNEL, policyId);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const tokens = await getAllowedTokens(owner, policyId);
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         count: tokens.length,
         tokens: tokens.map(t => ({
@@ -332,30 +389,31 @@ export function registerCallPolicyRoutes(router: Router): void {
         })),
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/tokens] error:", err);
+      console.error("[POST /callpolicy/tokens/all] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/token-limit
-   * Get token limit by address
-   * Query param: token
-   */
-  router.get("/callpolicy/:delegatedEOA/token-limit", async (req: Request, res: Response) => {
+  // get token limit by address
+  router.post("/callpolicy/token/limit", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      const { token } = req.query;
-
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
-      }
-      if (!token || typeof token !== "string" || !isValidAddress(token)) {
-        return res.status(400).json({ success: false, error: "Invalid token address" });
+      const { owner, delegatedKey, tokenAddress } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const limit = await getTokenLimit(KERNEL, policyId, token as `0x${string}`);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      if (!isValidAddress(tokenAddress)) {
+        return res.status(400).json({ success: false, error: "Invalid tokenAddress address" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      
+      const limit = await getTokenLimit(owner as `0x${string}`, policyId, tokenAddress as `0x${string}`);
 
       if (!limit) {
         return res.status(404).json({ success: false, error: "Token limit not found" });
@@ -363,78 +421,76 @@ export function registerCallPolicyRoutes(router: Router): void {
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
-        token,
+        tokenAddress,
         enabled: limit.enabled,
         txLimit: limit.txLimit.toString(),
         dailyLimit: limit.dailyLimit.toString(),
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/token-limit] error:", err);
+      console.error("[POST /callpolicy/token-limit] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/token-usage
-   * Get token daily usage
-   * Query params: token, day (optional)
-   */
-  router.get("/callpolicy/:delegatedEOA/token-usage", async (req: Request, res: Response) => {
+  // get token daily usage
+  router.post("/callpolicy/token/usage", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      const { token, day } = req.query;
-
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey, tokenAddress, day } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
-      if (!token || typeof token !== "string" || !isValidAddress(token)) {
+
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      if (!isValidAddress(tokenAddress)) {
         return res.status(400).json({ success: false, error: "Invalid token address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
       const targetDay = day ? Number(day) : undefined;
 
       if (day !== undefined && (!Number.isInteger(targetDay) || targetDay! < 0)) {
         return res.status(400).json({ success: false, error: "day must be a non-negative integer" });
       }
 
-      const usage = await getTokenDailyUsage(KERNEL, policyId, token as `0x${string}`, targetDay);
+      const usage = await getTokenDailyUsage(owner, policyId, tokenAddress as `0x${string}`, targetDay);
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
-        token,
+        tokenAddress,
         day: targetDay ?? getCurrentDay(),
         usage: usage.toString(),
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/token-usage] error:", err);
+      console.error("[POST /callpolicy/token/usage] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/token-usage-info
-   * Get token daily usage with limit info
-   * Query param: token
-   */
-  router.get("/callpolicy/:delegatedEOA/token-usage-info", async (req: Request, res: Response) => {
+  // get token daily usage with limit info
+  router.post("/callpolicy/token/usage-info", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      const { token } = req.query;
-
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey, tokenAddress } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
-      if (!token || typeof token !== "string" || !isValidAddress(token)) {
-        return res.status(400).json({ success: false, error: "Invalid token address" });
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+      if (!isValidAddress(tokenAddress)) {
+        return res.status(400).json({ success: false, error: "Invalid tokenAddress address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const usageInfo = await getTokenDailyUsageInfo(KERNEL, policyId, token as `0x${string}`);
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const usageInfo = await getTokenDailyUsageInfo(owner, policyId, tokenAddress as `0x${string}`);
 
       if (!usageInfo) {
         return res.status(404).json({ success: false, error: "Token not found or not configured" });
@@ -442,9 +498,9 @@ export function registerCallPolicyRoutes(router: Router): void {
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
-        token,
+        tokenAddress,
         day: getCurrentDay(),
         used: usageInfo.used.toString(),
         limit: usageInfo.limit.toString(),
@@ -452,166 +508,71 @@ export function registerCallPolicyRoutes(router: Router): void {
         percentage: usageInfo.percentage,
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/token-usage-info] error:", err);
+      console.error("[POST /callpolicy/token/usage-info] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
   // ---------------- RECIPIENTS ----------------
 
-  /**
-   * GET /callpolicy/:delegatedEOA/recipients
-   * Get all allowed recipients
-   */
-  router.get("/callpolicy/:delegatedEOA/recipients", async (req: Request, res: Response) => {
+  // get all allowed recipients
+  router.post("/callpolicy/recipient/all", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
+      const { owner, delegatedKey } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
+      }
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const recipients = await getAllowedRecipients(KERNEL, policyId);
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const recipients = await getAllowedRecipients(owner, policyId);
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
         count: recipients.length,
         recipients,
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/recipients] error:", err);
+      console.error("[POST /callpolicy/recipient/all] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
     }
   });
 
-  /**
-   * GET /callpolicy/:delegatedEOA/recipient-allowed
-   * Check if recipient is allowed
-   * Query param: recipient
-   */
-  router.get("/callpolicy/:delegatedEOA/recipient-allowed", async (req: Request, res: Response) => {
+  // check if recipient is allowed
+  router.post("/callpolicy/recipient/is-allowed", async (req: Request, res: Response) => {
     try {
-      const { delegatedEOA } = req.params;
-      const { recipient } = req.query;
-
-      if (!isValidAddress(delegatedEOA)) {
-        return res.status(400).json({ success: false, error: "Invalid delegatedEOA address" });
-      }
-      if (!recipient || typeof recipient !== "string" || !isValidAddress(recipient)) {
-        return res.status(400).json({ success: false, error: "Invalid recipient address" });
+      const { owner, delegatedKey, recipientAddress } = req.body;
+      
+      if (!isValidAddress(owner)) {
+        return res.status(400).json({ success: false, error: "Invalid owner (kernel) address" });
       }
 
-      const policyId = getPermissionId(delegatedEOA as `0x${string}`);
-      const allowed = await isRecipientAllowed(KERNEL, policyId, recipient as `0x${string}`);
+      if (!isValidAddress(delegatedKey)) {
+        return res.status(400).json({ success: false, error: "Invalid delegatedKey address" });
+      }
+
+      if (!isValidAddress(recipientAddress)) {
+        return res.status(400).json({ success: false, error: "Invalid recipientAddress address" });
+      }
+
+      const policyId = getPermissionId(owner as `0x${string}`, delegatedKey as `0x${string}`);
+      const allowed = await isRecipientAllowed(owner, policyId, recipientAddress as `0x${string}`);
 
       return res.json({
         success: true,
-        delegatedEOA,
+        delegatedKey,
         policyId,
-        recipient,
+        recipientAddress,
         allowed,
       });
     } catch (err: any) {
-      console.error("[GET /callpolicy/:delegatedEOA/recipient-allowed] error:", err);
+      console.error("[POST /callpolicy/recipient/is-allowed] error:", err);
       return res.status(500).json({ success: false, error: err?.message ?? "internal error" });
-    }
-  });
-
-  // ---------------- LEGACY / UTILITY ROUTES ----------------
-
-  /**
-   * POST /callpolicy/regenerate
-   * Regenerate permission ID and vId for a delegated key
-   */
-  router.post("/callpolicy/regenerate", async (req: Request, res: Response) => {
-    try {
-      const { kernelAddress, delegatedEOA } = req.body;
-
-      if (!kernelAddress || !delegatedEOA) {
-        return res.status(400).json({
-          success: false,
-          error: "Missing required parameters",
-          message: "kernelAddress and delegatedEOA are required",
-        });
-      }
-
-      console.log(`[POST /callpolicy/regenerate] Regenerating permission ID for:`, {
-        kernelAddress,
-        delegatedEOA,
-      });
-
-      const permissionId = getPermissionId(delegatedEOA as `0x${string}`);
-      const vId = getVId(permissionId);
-
-      console.log(`[POST /callpolicy/regenerate] Generated permissionId:`, permissionId);
-      console.log(`[POST /callpolicy/regenerate] Generated vId:`, vId);
-
-      return res.json({
-        success: true,
-        permissionId,
-        vId,
-        message: "Permission ID regenerated successfully",
-      });
-    } catch (err: any) {
-      console.error("[POST /callpolicy/regenerate] error:", err);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to regenerate permission ID",
-        message: err?.message ?? "internal error",
-        details: err?.stack,
-      });
-    }
-  });
-
-  /**
-   * POST /callpolicy/all-permissions-with-usage
-   * Get all permissions with usage info (legacy)
-   */
-  router.post("/callpolicy/all-permissions-with-usage", async (req: Request, res: Response) => {
-    try {
-      const { policyId, owner } = req.body;
-
-      if (!policyId || !owner) {
-        return res.status(400).json({
-          success: false,
-          error: "Missing required parameters",
-          message: "policyId and owner are required",
-        });
-      }
-
-      console.log(`[POST /callpolicy/all-permissions-with-usage] Getting all permissions with usage for:`, {
-        policyId,
-        owner,
-      });
-
-      const permissions = await getAllCallPolicyPermissionsWithUsage(policyId as `0x${string}`, owner as `0x${string}`);
-
-      const serializedPermissions = permissions.map((permission) => ({
-        ...permission,
-        dailyUsage: permission.dailyUsage.toString(),
-        rules: permission.rules.map((rule) => ({
-          ...rule,
-          offset: rule.offset.toString(),
-          params: rule.params,
-        })),
-      }));
-
-      return res.json({
-        success: true,
-        permissions: serializedPermissions,
-        count: serializedPermissions.length,
-        message: `Found ${serializedPermissions.length} permissions`,
-      });
-    } catch (err: any) {
-      console.error("[POST /callpolicy/all-permissions-with-usage] error:", err);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get all permissions with usage",
-        message: err?.message ?? "internal error",
-        details: err?.stack,
-      });
     }
   });
 }

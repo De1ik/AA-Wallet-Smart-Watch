@@ -39,7 +39,7 @@ export default function SettingsScreen() {
           
           <TouchableOpacity 
             style={styles.settingItem}
-            onPress={() => router.push('/settings/smart-watch')}
+            onPress={() => router.push('/settings/smart-watch-connection/delegated-keys-list/smart-watch')}
           >
             <IconSymbol name="applewatch" size={24} color="#8B5CF6" />
             <Text style={styles.settingText}>Smart Watch Connection</Text>

@@ -18,7 +18,7 @@ export function registerUserOperationRoutes(router: Router): void {
       console.log("PREPARE:", req.body)
       console.log("*".repeat(30))
 
-      const permissionId = getPermissionId(delegatedEOA);
+      const permissionId = getPermissionId(kernelAddress, delegatedEOA);
 
       console.log("[userOp/prepare] -> permissionId:", permissionId);
 
@@ -82,7 +82,7 @@ export function registerUserOperationRoutes(router: Router): void {
 
       const { to, amountWei, data, delegatedEOA, signature, opHash, kernelAddress, tokenAddress } = req.body ?? {};
 
-      const permissionId = getPermissionId(delegatedEOA);
+      const permissionId = getPermissionId(kernelAddress, delegatedEOA);
 
       console.log("[userOp/broadcast] -> permissionId:", permissionId);
 

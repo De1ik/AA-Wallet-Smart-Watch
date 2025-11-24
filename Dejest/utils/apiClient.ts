@@ -1,145 +1,29 @@
 import { AllPermissionsPerDelegatedKey, RequestCreateDelegateKey } from '@/types/types';
 import { config } from './config';
 
-// API Response types
-export interface ApiResponse<T = any> {
-  success?: boolean;
-  error?: string;
-  data?: T;
-}
+import { 
+  ApiResponse,
+  NonceResponse,
+  InstallPermissionResponse,
+  EnableSelectorResponse,
+  GrantAccessResponse,
+  UninstallPermissionResponse,
+  UserOpPrepareResponse,
+  UserOpBroadcastResponse,
+  InstallationStatus,
+  CreateDelegatedKeyResponse,
+  PrefundCheckResponse,
+  EntryPointDepositResponse,
+  RevokeKeyResponse,
+  TokenBalance,
+  BalancesResponse,
+  Transaction,
+  TransactionsResponse,
+  SendTransactionResponse,
+  CallPolicyResponse
+} from '@/types/types';
 
-export interface NonceResponse {
-  nonce: string;
-}
 
-export interface InstallPermissionResponse {
-  permissionId: string;
-  vId: string;
-  txHash: string;
-}
-
-export interface EnableSelectorResponse {
-  txHash: string;
-}
-
-export interface GrantAccessResponse {
-  txHash: string;
-}
-
-export interface UninstallPermissionResponse {
-  permissionId: string;
-  vId: string;
-  txHash: string;
-}
-
-export interface UserOpPrepareResponse {
-  userOpHash: string;
-  echo: {
-    permissionId: string;
-    to: string;
-    amountWei: string;
-    data: string;
-  };
-}
-
-export interface UserOpBroadcastResponse {
-  txHash: string;
-}
-
-export interface InstallationStatus {
-  step: 'installing' | 'granting' | 'completed' | 'failed';
-  message: string;
-  progress: number; // 0-100
-  txHash?: string;
-  error?: string;
-  permissionId?: string;
-  vId?: string;
-}
-
-export interface CreateDelegatedKeyResponse {
-  success: boolean;
-  installationId: string;
-  message: string;
-}
-
-export interface PrefundCheckResponse {
-  hasPrefund: boolean;
-  message: string;
-  error?: string;
-  details?: string;
-  depositWei?: string;
-  requiredPrefundWei?: string;
-  shortfallWei?: string;
-  kernelAddress?: string;
-  entryPointAddress?: string;
-}
-
-export interface EntryPointDepositResponse {
-  success: boolean;
-  txHash?: string;
-  userOpHash?: string;
-  message: string;
-  error?: string;
-  kernelAddress?: string;
-  entryPointAddress?: string;
-  amountWei?: string;
-  gasUsed?: string;
-  revertReason?: string;
-  details?: string;
-}
-
-export interface RevokeKeyResponse {
-  success: boolean;
-  txHash: string;
-  message: string;
-}
-
-export interface TokenBalance {
-  symbol: string;
-  name: string;
-  balance: string;
-  value: number;
-  decimals: number;
-  address: string;
-  color: string;
-  amount: string;
-}
-
-export interface BalancesResponse {
-  success: boolean;
-  ethBalance: string;
-  tokens: TokenBalance[];
-  message: string;
-}
-
-export interface Transaction {
-  hash: string;
-  from: string;
-  to: string;
-  value: string;
-  timestamp: number;
-  type: 'sent' | 'received';
-  status: 'success' | 'pending' | 'failed';
-  tokenSymbol?: string;
-  tokenAddress?: string;
-  eventType?: string;
-  errorMessage?: string;
-  tokenId?: string; // For NFTs
-}
-
-export interface TransactionsResponse {
-  success: boolean;
-  transactions: Transaction[];
-  message: string;
-  limit: number;
-}
-
-export interface SendTransactionResponse {
-  success: boolean;
-  txHash: string;
-  message: string;
-  error?: string;
-}
 
 class ApiClient {
   private baseUrl: string;
@@ -163,7 +47,7 @@ class ApiClient {
     };
 
     try {
-      console.log(`[ApiClient] Making request to ${url}`, options.body ? JSON.parse(options.body as string) : '');
+      console.log(`[ApiClient] -> Making request to ${url}`, options.body ? JSON.parse(options.body as string) : '');
       
       const response = await fetch(url, defaultOptions);
       
@@ -179,10 +63,10 @@ class ApiClient {
       }
 
       const data = await response.json();
-      console.log(`[ApiClient] Success response from ${url}:`, data);
+      console.log(`[ApiClient] -> Success response from ${url}:`, data);
       return data;
     } catch (error) {
-      console.error(`[ApiClient] Request failed for ${endpoint}:`, error);
+      console.error(`[ApiClient] -> Request failed for ${endpoint}:`, error);
       
       // Enhance error messages for common scenarios
       if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -309,80 +193,10 @@ class ApiClient {
 
   // CallPolicy data fetching
   async fetchCallPolicyPermissions(params: {
-    kernelAddress: string;
-    delegatedEOA: string;
-    permissionId: string;
-  }): Promise<{
-    success: boolean;
-    permissions: any[];
-    count: number;
-    message: string;
-  }> {
-    return this.makeRequest('/wallet/callpolicy/fetch', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
-  async checkPermissionExists(params: {
-    kernelAddress: string;
-    delegatedEOA: string;
-    permissionId: string;
-    callType: number;
-    target: string;
-    selector: string;
-  }): Promise<{
-    success: boolean;
-    exists: boolean;
-    message: string;
-  }> {
-    return this.makeRequest('/wallet/callpolicy/check', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
-  // Get all permissions with daily usage for a policy
-  async getAllCallPolicyPermissionsWithUsage(params: {
-    policyId: string;
     owner: string;
-  }): Promise<{
-    success: boolean;
-    permissions: AllPermissionsPerDelegatedKey;
-    message: string;
-  }> {
-    return this.makeRequest('/wallet/callpolicy/all-permissions-with-usage', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
-  // Get today's daily usage for a specific permission
-  async getCallPolicyDailyUsageToday(params: {
-    policyId: string;
-    wallet: string;
-    permissionHash: string;
-  }): Promise<{
-    success: boolean;
-    dailyUsage: string;
-    message: string;
-  }> {
-    return this.makeRequest('/wallet/callpolicy/daily-usage-today', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
-  async regeneratePermissionId(params: {
-    kernelAddress: string;
-    delegatedEOA: string;
-  }): Promise<{
-    success: boolean;
-    permissionId: string;
-    vId: string;
-    message: string;
-  }> {
-    return this.makeRequest('/wallet/callpolicy/regenerate', {
+    delegatedKey: string;
+  }): Promise<CallPolicyResponse> {
+    return this.makeRequest<CallPolicyResponse>('/wallet/callpolicy/info', {
       method: 'POST',
       body: JSON.stringify(params),
     });

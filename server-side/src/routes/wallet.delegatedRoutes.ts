@@ -36,6 +36,15 @@ type CallPolicyConfigInput = {
   recipients?: string[];
 };
 
+const KNOWN_TOKEN_DECIMALS: Record<string, number> = {
+  "0x0000000000000000000000000000000000000000": 18, // native
+  "0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357": 18, // DAI
+  "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984": 18, // UNI
+  "0xfff9976782d46cc05630d1f6ebab18b2324d6b14": 18, // WETH
+  "0xaa8e23fb1079ea71e0a56f48a2aa51851d8433d0": 6,  // USDT
+  "0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8": 6,  // USDC
+};
+
 type NormalizedTokenLimit = {
   token: Address;
   txLimit: bigint;
@@ -394,7 +403,10 @@ function normalizeTokenLimits(limits?: TokenLimitInput[]): NormalizedTokenLimit[
     if (!/^0x[a-fA-F0-9]{40}$/.test(lower)) continue;
     if (seen.has(lower)) continue;
 
-    const decimals = typeof limit.decimals === "number" ? limit.decimals : 18;
+    const decimals =
+      typeof limit.decimals === "number"
+        ? limit.decimals
+        : KNOWN_TOKEN_DECIMALS[lower] ?? 18;
     try {
       const txLimit = parseUnits(limit.txLimit?.toString() ?? "0", decimals);
       const dailyLimit = parseUnits(limit.dailyLimit?.toString() ?? "0", decimals);

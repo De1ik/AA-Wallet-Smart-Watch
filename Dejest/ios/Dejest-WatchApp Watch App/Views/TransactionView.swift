@@ -397,7 +397,10 @@ struct TransactionView: View {
     // MARK: - Delegated Transaction Flow
     
     private func sendDelegatedTransaction() {
-        guard let amountDouble = Double(amount) else {
+        let token = allowedTokensWithEth().first { ($0["address"] as? String)?.lowercased() == selectedTokenAddress.lowercased() }
+        let decimals = token?["decimals"] as? Int ?? 18
+        
+        guard let amountInUnits = UserOpManager.shared.amountToUnits(amount, decimals: decimals) else {
             errorText = "Invalid amount"
             return
         }
@@ -407,9 +410,6 @@ struct TransactionView: View {
         let from = publicAddress
         let to = toAddress
 
-        let token = allowedTokensWithEth().first { ($0["address"] as? String)?.lowercased() == selectedTokenAddress.lowercased() }
-        let decimals = token?["decimals"] as? Int ?? 18
-        let amountInUnits = UserOpManager.shared.amountToUnits(amountDouble, decimals: decimals)
         let tokenAddress: String? = (selectedTokenAddress == "ETH") ? nil : selectedTokenAddress
       
         guard let kernelAddress = EthereumKeyManager.shared.loadKernelAddress() else {
@@ -417,7 +417,7 @@ struct TransactionView: View {
           return
         }
         
-        print("🚀 Starting delegated tx: from=\(from), to=\(to), amount=\(amountDouble), token=\(tokenAddress ?? "ETH")")
+        print("🚀 Starting delegated tx: from=\(from), to=\(to), amount=\(amount), token=\(tokenAddress ?? "ETH")")
         
         UserOpManager.shared.prepareSignAndSendUserOp(kernelAddress: kernelAddress, from: from, to: to, amountInWei: amountInUnits, tokenAddress: tokenAddress) { result in
           DispatchQueue.main.async {

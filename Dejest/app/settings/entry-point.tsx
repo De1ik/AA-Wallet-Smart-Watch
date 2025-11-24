@@ -3,7 +3,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert, Modal } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { apiClient, PrefundCheckResponse } from '@/utils/apiClient';
+import { apiClient } from '@/utils/apiClient';
+import { PrefundCheckResponse } from '@/types/types';
 import { formatEther } from 'viem';
 import { getEntryPointAddress, getKernelAddress } from '@/utils/config';
 

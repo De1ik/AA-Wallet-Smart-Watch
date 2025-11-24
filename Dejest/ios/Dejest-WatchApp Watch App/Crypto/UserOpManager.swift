@@ -11,15 +11,20 @@ class UserOpManager {
     
     let backendURL = "http://localhost:4000/wallet" // твой бекенд
   
-    func ethToWei(_ eth: Double) -> String {
-        let wei = eth * pow(10.0, 18.0)
-        return String(format: "%.0f", wei)
+    func ethToWei(_ eth: String) -> String? {
+        guard let decimal = Decimal(string: eth) else { return nil }
+        var scaled = decimal
+        var result = Decimal()
+        NSDecimalMultiplyByPowerOf10(&result, &scaled, 18, .plain)
+        return NSDecimalNumber(decimal: result).stringValue
     }
     
-    func amountToUnits(_ amount: Double, decimals: Int) -> String {
-        let factor = pow(10.0, Double(decimals))
-        let units = amount * factor
-        return String(format: "%.0f", units)
+    func amountToUnits(_ amount: String, decimals: Int) -> String? {
+        guard let decimal = Decimal(string: amount) else { return nil }
+        var scaled = decimal
+        var result = Decimal()
+        NSDecimalMultiplyByPowerOf10(&result, &scaled, Int16(decimals), .plain)
+        return NSDecimalNumber(decimal: result).stringValue
     }
   
     // MARK: - Step 1: Отправляем на сервер данные (from, to, amount)
