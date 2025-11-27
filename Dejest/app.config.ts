@@ -1,8 +1,9 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 import 'dotenv/config';
 
-const DEFAULT_KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+// const DEFAULT_KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
 const DEFAULT_ENTRYPOINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -19,6 +20,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     bundleIdentifier: "com.de1ik.Dejest",
   },
   android: {
+    package: "com.de1ik.Dejest",
     adaptiveIcon: {
       backgroundColor: '#E6F4FE',
       foregroundImage: './assets/images/android-icon-foreground.png',
@@ -52,13 +54,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     reactCompiler: true,
   },
   extra: {
-    PRIVATE_KEY_TEST: process.env.PRIVATE_KEY_TEST === 'true',
-    PRIVATE_KEY: process.env.PRIVATE_KEY,
-    KERNEL: process.env.KERNEL ?? DEFAULT_KERNEL,
+    PRIVATE_KEY: process.env.IS_SKIP_AUTH === 'true' ? process.env.PRIVATE_KEY : '',
+    KERNEL: process.env.IS_SKIP_AUTH === 'true' ? process.env.KERNEL : '',
     ENTRY_POINT: process.env.ENTRY_POINT ?? DEFAULT_ENTRYPOINT,
     SKIP_SEED: process.env.SKIP_SEED === 'true',
     ZERODEV_RPC: process.env.ZERODEV_RPC,
-    ZERODEV_PROJECT_ID: process.env.ZERODEV_PROJECT_ID,
     API_BASE_URL: process.env.API_BASE_URL ?? 'http://localhost:4000',
     PORT: process.env.PORT ?? '4000',
   },

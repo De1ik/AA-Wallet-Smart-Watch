@@ -59,3 +59,106 @@ export enum CallPolicyParamCondition {
   NOT_EQUAL = 5,
   ONE_OF = 6,
 }
+
+
+export enum PermissionPolicyType {
+  SUDO = 0,
+  CALL_POLICY = 1,
+}
+
+export interface SendUOpRequest {
+  unpacked: UnpackedUserOperationV07;
+  signature: string;
+  delegatedAddress: Address;
+}
+
+
+export interface PrepareDataForSigning {
+  unpacked: UnpackedUserOperationV07;
+  packed: PackedUserOperation;
+  userOpHash: Hex;
+}
+
+export interface PrepareDelegateInstallation {
+  permissionPolicyType: PermissionPolicyType;
+  permissionPolicyData: PrepareDataForSigning;
+  grantAccessData: PrepareDataForSigning;
+  recipientListData?: PrepareDataForSigning;
+  tokenListData?: PrepareDataForSigning;
+}
+
+
+export interface DelegateInstallationPrepareData {
+  isSuccess: boolean;
+  data?: PrepareDelegateInstallation;
+}
+
+
+// ----- SIGNED -----
+
+export interface SignedDataForDelegateInstallation {
+  unpacked: UnpackedUserOperationV07;
+  signature: Hex;
+}
+
+export interface ExecuteDelegateInstallation {
+  permissionPolicyType: PermissionPolicyType;
+  signedPermissionPolicyData: SignedDataForDelegateInstallation;
+  signedGrantAccessData: SignedDataForDelegateInstallation;
+  signedRecipientListData?: SignedDataForDelegateInstallation;
+  signedTokenListData?: SignedDataForDelegateInstallation;
+}
+
+// ----------- convertToCallPolicyPermissions -----------
+export interface PermissionRule {
+  condition: number;
+  offset: bigint;
+  params: `0x${string}`[];
+}
+
+// ----------- ----------- ----------- ----------- -----------
+
+export type TokenLimitInput = {
+  token: string;
+  txLimit: string | number;
+  dailyLimit: string | number;
+  decimals?: number;
+  enabled?: boolean;
+};
+
+export type CallPolicyConfigInput = {
+  tokenLimits?: TokenLimitInput[];
+  recipients?: string[];
+};
+
+export type NormalizedTokenLimit = {
+  token: Address;
+  txLimit: bigint;
+  dailyLimit: bigint;
+  enabled: boolean;
+};
+
+export type NormalizedCallPolicyPayload = {
+  callPolicyPermissions: CallPolicyPermission[];
+  tokenLimits: NormalizedTokenLimit[];
+  recipients: Address[];
+};
+
+export interface PrepareDelegateKeyInput {
+  delegatedEOA: string;
+  keyType: PermissionPolicyType;
+  clientId?: string;
+  permissions?: any;
+  callPolicyConfig?: any;
+  kernelAddress: string;
+}
+
+export interface RevokePrepareInput {
+  delegatedEOA: string;
+  kernelAddress: string;
+}
+
+export interface RevokeExecuteInput {
+  data: SignedDataForDelegateInstallation;
+  kernelAddress: string;
+}

@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { parseEther, Address, Hex } from 'viem';
+import { parseEther, Address, Hex, isAddress } from 'viem';
 import { isTestMode, getKernelAddress, getPrivateKey } from './config';
-import { buildSendRootUO, checkPrefund, sendUserOpV07 } from './native-code';
+import { buildSendRootUO, sendUserOpV07 } from './native-code';
+import { loadPrivateKey } from './secureStorage';
+import { createKernelWallet } from '@/app/kernel-factory';
 
 /**
  * Get private key from secure storage or test environment
@@ -20,17 +22,12 @@ export async function getPrivateKeyFromStorage(): Promise<`0x${string}`> {
   }
   
   // Use real user's private key from secure storage
-  const storedWallet = await AsyncStorage.getItem('wallet');
-  if (!storedWallet) {
-    throw new Error('No wallet found in secure storage');
-  }
-  
-  const wallet = JSON.parse(storedWallet);
-  if (!wallet.privateKey) {
-    throw new Error('No private key found in wallet');
+  const storedPrivateKey = await loadPrivateKey();
+  if (!storedPrivateKey) {
+    throw new Error('No private key found in secure storage');
   }
 
-  return wallet.privateKey as `0x${string}`;
+  return storedPrivateKey as `0x${string}`;
 }
 
 /**
@@ -59,6 +56,9 @@ export async function getWalletAddress(): Promise<Address> {
   if (!wallet.address) {
     throw new Error('No address found in wallet');
   }
+  if (!isAddress(wallet.address)) {
+    throw new Error('incorrect address format stored in wallet')
+  }
 
   return wallet.address as Address;
 }
@@ -78,10 +78,23 @@ export async function predictSmartWalletAddress(privateKey: `0x${string}`): Prom
     }
     return kernelAddress as Address;
   }
-  
-  // For production mode, you can implement this using your native-code.ts logic if needed
-  // For now, return a placeholder address
-  return '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A' as Address;
+
+  // Try stored smart wallet
+  try {
+    const storedWallet = await AsyncStorage.getItem('wallet');
+    if (storedWallet) {
+      const parsed = JSON.parse(storedWallet);
+      if (parsed.smartWalletAddress) {
+        return parsed.smartWalletAddress as Address;
+      }
+    }
+  } catch (error) {
+    console.warn('Could not read stored wallet for smart address:', error);
+  }
+
+  // Create Kernel natively and return its address
+  const { kernelAccount, hash } = await createKernelWallet(privateKey as Hex);
+  return kernelAccount.address;
 }
 
 /**
@@ -123,4 +136,3 @@ export async function sendTransaction({
     throw error;
   }
 }
-

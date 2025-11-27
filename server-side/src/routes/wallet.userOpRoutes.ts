@@ -1,9 +1,8 @@
 import type { Request, Response, Router } from "express";
 import type { Address } from "viem";
 
-import { buildDelegatedSendUO, getPermissionId, sendUserOpV07, UnpackedUserOperationV07 } from "../utils/native-code";
+import { buildDelegatedSendUO, getPermissionId, SendUOpRequest, sendUserOpV07, UnpackedUserOperationV07 } from "../utils/native-code";
 import { encodeFunctionData, parseAbi } from "viem";
-import { KERNEL_ADDRESS } from "./wallet.constants";
 import { buildBroadcastErrorResponse, ensureSufficientNativeBalance } from "./wallet.errors";
 
 export function registerUserOperationRoutes(router: Router): void {
@@ -13,10 +12,6 @@ export function registerUserOperationRoutes(router: Router): void {
       console.log("[userOp/prepare] -> req.body:", req.body);
 
       const { to, amountWei, data, delegatedEOA, kernelAddress, tokenAddress } = req.body ?? {};
-
-      console.log("*".repeat(30))
-      console.log("PREPARE:", req.body)
-      console.log("*".repeat(30))
 
       const permissionId = getPermissionId(kernelAddress, delegatedEOA);
 
@@ -100,7 +95,7 @@ export function registerUserOperationRoutes(router: Router): void {
       }
       amtWei = BigInt(amountWei.toString());
       const callData = typeof data === "string" && data.startsWith("0x") ? data : "0x";
-      normalizedKernelAddress = (kernelAddress as Address) ?? KERNEL_ADDRESS;
+      normalizedKernelAddress = kernelAddress;
 
       // Native balance check only matters for native value transfers
       if (!tokenAddress && normalizedKernelAddress && amtWei > 0n) {
@@ -155,6 +150,27 @@ export function registerUserOperationRoutes(router: Router): void {
       console.error("[/userOp/broadcast] error:", err);
       const { status, body } = await buildBroadcastErrorResponse(err, normalizedKernelAddress, amtWei);
       return res.status(status).json(body);
+    }
+  });
+
+  router.post("/userOp/send-uop", async (req: Request, res: Response) => {
+    try {
+
+      const sendData: SendUOpRequest = req.body;
+
+      if (sendData.signature || typeof sendData.signature !== "string" || sendData.signature.startsWith("0x")) {
+        return res.status(400).json({ error: "signature is required (0x-hex)" });
+      }
+
+      if (sendData.signature != sendData.unpacked.signature) {
+        return res.status(400).json({ error: "signature in unpacked data is not the same" });
+      }
+
+      const { txHash } = await sendUserOpV07(sendData.unpacked);
+
+      return res.json({ txHash });
+    } catch (err: any) {
+      return res.status(400).json({ error: "Error during transaction sending" });
     }
   });
 }

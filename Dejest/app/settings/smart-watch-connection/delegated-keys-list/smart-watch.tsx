@@ -21,6 +21,7 @@ import { InstallationDetailsModal } from './components/InstallationDetailsModal'
 import { DeviceDetailsModal } from './components/DeviceDetailsModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { getDelegatedKeys as getDelegatedKeysStorage } from '@/utils/delegatedKeys';
+import { useWallet } from '@/contexts/WalletContext';
 
 const formatTokenLimit = (txLimit: string, dailyLimit: string, decimals?: number, symbol?: string) => {
   try {
@@ -58,6 +59,7 @@ export default function SmartWatchScreen() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmPayload, setConfirmPayload] = useState<{ device?: DelegatedKeyData; address?: string } | null>(null);
+  const { wallet } = useWallet()
 
   // Load delegated keys on component mount and when focused
 
@@ -683,7 +685,7 @@ export default function SmartWatchScreen() {
           if (confirmPayload?.device) {
             try {
               setIsRevoking(true);
-              const response = await apiClient.revokeKey(confirmPayload.device.publicAddress);
+              const response = await apiClient.revokeKey(confirmPayload.device.publicAddress, wallet!.smartWalletAddress!);
               if (response.success) {
                 await removeDelegatedKey(confirmPayload.device.id);
                 await loadDelegatedKeys();
@@ -702,7 +704,7 @@ export default function SmartWatchScreen() {
           } else if (confirmPayload?.address) {
             setIsRevoking(true);
             try {
-              const response = await apiClient.revokeKey(confirmPayload.address);
+              const response = await apiClient.revokeKey(confirmPayload.address, wallet!.smartWalletAddress!);
               if (response.success) {
                 try {
                   const keys = await getDelegatedKeys();

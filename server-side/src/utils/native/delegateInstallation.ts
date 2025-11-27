@@ -1,61 +1,179 @@
-import type { Request, Response, Router } from "express";
-import { handlePrepareDelegatedKeyCreation } from "../utils/native/delegateKey/installPrepare";
-import { handleExecuteDelegatedKeyCreation } from "../utils/native/delegateKey/installExecute";
-import { handlePrepareDelegatedKeyRevoke } from "../utils/native/delegateKey/revokePrepare";
-import { handleExecuteDelegatedKeyRevoke } from "../utils/native/delegateKey/revokeExecute";
+// import { Address, parseUnits } from "viem";
+
+// import {
+//   CallPolicyPermission,
+//   DelegateInstallationPrepareData,
+//   PrepareDataForSigning,
+//   PermissionPolicyType,
+//   ExecuteDelegateInstallation,
+//   UnpackedUserOperationV07,
+//   PermissionRule,
+//   TokenLimitInput,
+//   CallPolicyConfigInput,
+//   NormalizedTokenLimit,
+//   NormalizedCallPolicyPayload
+// } from "./types";
+
+// import { 
+//     buildGrantAccessUoUnsigned,
+//     buildInstallCallPolicyUoUnsigned,
+//     buildInstallPermissionUoUnsigned,
+//     buildUninstallPermissionUoUnsigned,
+//     buildSetTokenLimitUoUnsigned,
+//     buildSetRecipientAllowedUoUnsigned,
+//     getRootCurrentNonce,
+//     sendUserOpV07,
+// } from "./userOps";
+
+
+// import { 
+//     getAllowedTokens, 
+//     getAllowedRecipients 
+// } from "./callPolicy";
+
+// import { InstallationStatus } from "../../services/websocket";
+// import { wsService } from "../..";
+// import { checkPrefundSimple } from "../../routes/wallet.prefund";
+// import { 
+//     KNOWN_TOKEN_DECIMALS, 
+//     EXECUTE_SELECTOR,
+// } from "./constants";
 
 
 
+// interface PrepareDelegateKeyInput {
+//   delegatedEOA: string;
+//   keyType: PermissionPolicyType;
+//   clientId?: string;
+//   permissions?: any;
+//   callPolicyConfig?: any;
+//   kernelAddress: string;
+// }
 
+// interface HttpResult {
+//   status: number;
+//   body: any;
+// }
 
-export function registerDelegatedRoutes(router: Router): void {
-  // Route to create a delegated key with specified permissions (include full flow)
-  router.post("/delegated/install/prepare-data", async (req: Request, res: Response) => {
-    const result = await handlePrepareDelegatedKeyCreation(req.body);
+// export async function handlePrepareDelegatedKeyCreation(
+//   input: PrepareDelegateKeyInput
+// ): Promise<HttpResult> {
+//   try {
+//     const { delegatedEOA, keyType, clientId, permissions, callPolicyConfig, kernelAddress } = input;
 
-    if (result.status === 200) {
-      return res.json(result.body);
-    }
+//     // --- VALIDATION BLOCK ---
+//     const kernelError = validateKernelAddress(kernelAddress);
+//     if (kernelError) return badRequest(kernelError);
 
-    return res.status(result.status).json(result.body);
-  });
+//     const delegatedEOAError = validateDelegatedAddress(delegatedEOA);
+//     if (delegatedEOAError) return badRequest(delegatedEOAError);
 
-  // Route to create a delegated key with specified permissions (include full flow)
-  router.post("/delegated/install/execute", async (req: Request, res: Response) => {
-    const result = await handleExecuteDelegatedKeyCreation(req.body);
+//     const keyTypeError = validateKeyType(keyType);
+//     if (keyTypeError) return badRequest(keyTypeError);
 
-    if (result.status === 200) {
-      return res.json(result.body);
-    }
+//     if (keyType === PermissionPolicyType.CALL_POLICY) {
+//       const permError = validateCallPolicyPermissions(permissions);
+//       if (permError) return badRequest(permError);
+//     }
 
-    return res.status(result.status).json(result.body);
-  });
+//     if (!clientId || typeof clientId !== "string") {
 
-  // Route to revoke a delegated key's access
-  router.post("delegated/revoke/prepare-data", async (req: Request, res: Response) => {
-    const result = await handlePrepareDelegatedKeyRevoke(req.body);
+//     // --- PREFUND CHECK ---
+//     const installationId = generateInstallationId();
+//     const prefund = await checkPrefundSafe(kernelAddress as Address, installationId);
+//     if (prefund.error) return badRequest(prefund.message);
 
-    return res.status(result.status).json(result.body);
-  });
+//     // --- NORMALIZATION ---
+//     let normalized = null;
+//     if (keyType === PermissionPolicyType.CALL_POLICY) {
+//       normalized = extractCallPolicyPayload(permissions, callPolicyConfig, delegatedEOA);
 
-  // Route to revoke a delegated key's access
-  router.post("delegated/revoke/execute", async (req: Request, res: Response) => {
-    const result = await handleExecuteDelegatedKeyRevoke(req.body);
+//       if (!normalized.callPolicyPermissions.length) {
+//         return badRequest("At least one permission is required for callpolicy");
+//       }
+//     }
 
-    return res.status(result.status).json(result.body);
-  });
-}
+//     // --- MAIN LOGIC ---
+//     const result = await prepareDelegatedKeyInstallationData(
+//       installationId,
+//       delegatedEOA,
+//       keyType,
+//       clientId,
+//       kernelAddress,
+//       normalized?.callPolicyPermissions ?? [],
+//       normalized?.tokenLimits ?? [],
+//       normalized?.recipients ?? []
+//     );
 
+//     if (result.isSuccess) {
+//       return ok({
+//         success: true,
+//         result: result.data,
+//         installationId,
+//         message: "Installation started",
+//       });
+//     }
 
+//     return ok({
+//       success: false,
+//       installationId,
+//       message: "Installation failed",
+//     });
 
+//   } catch (err: any) {
+//     console.error("[/delegated/create] error:", err);
+//     return internalError("Failed to start delegated key creation", err);
+//   }
+// }
 
+// const badRequest = (message: string): HttpResult => ({
+//   status: 400,
+//   body: { error: message },
+// });
 
+// const ok = (body: any): HttpResult => ({
+//   status: 200,
+//   body,
+// });
 
+// const internalError = (msg: string, err: any): HttpResult => ({
+//   status: 500,
+//   body: { error: msg, details: err?.message },
+// });
+
+// function validateKernelAddress(addr: string): string | null {
+//   if (typeof addr !== "string") return "kernelAddress must be a string";
+//   if (!addr.startsWith("0x") || addr.length !== 42) return "incorrect kernel address";
+//   return null;
+// }
+
+// function validateKeyType(type: PermissionPolicyType): string | null {
+//   if (!type || ![PermissionPolicyType.SUDO, PermissionPolicyType.CALL_POLICY].includes(type)) {
+//     return `keyType must be either '${PermissionPolicyType.SUDO}' or '${PermissionPolicyType.CALL_POLICY}'`;
+//   }
+//   return null;
+// }
+
+// function generateInstallationId(): string {
+//   return Math.random().toString(36).substring(7);
+// }
+
+// async function checkPrefundSafe(kernel: Address, id: string) {
+//   try {
+//     const prefund = await checkPrefundSimple(kernel);
+//     if (!prefund.hasPrefund) {
+//       return { error: true, message: prefund.message };
+//     }
+//     return { error: false };
+//   } catch (err: any) {
+//     return { error: true, message: err.message };
+//   }
+// }
 
 
 
 // // Helper functions for validation correct address format
-// function validateDelegatedEOA(address: unknown): string | null {
+// function validateDelegatedAddress(address: unknown): string | null {
 //   if (!address || typeof address !== "string") {
 //     return "delegatedEOA is required and must be a valid Ethereum address string";
 //   }
@@ -67,22 +185,23 @@ export function registerDelegatedRoutes(router: Router): void {
 //   return null;
 // }
 
-// // Helper to convert input permissions to CallPolicyPermission format
-// function convertToCallPolicyPermissions(permissions: any[], delegatedEOA: string): CallPolicyPermission[] {
-//   console.log("*".repeat(50));
-//   console.log("*".repeat(50));
-//   console.log("Converting permissions:", permissions);
-//   console.log("*".repeat(50));
-//   console.log("*".repeat(50));
 
-//   return permissions.map((perm) => {
-//     const selector = perm.selector === "0x" ? "0x00000000" : perm.selector;
+// // Helper to convert input permissions to CallPolicyPermission format
+// function convertToCallPolicyPermissions(
+//   permissions: any[],
+//   delegatedAddress: Address
+// ): CallPolicyPermission[] {
+
+//   return permissions.map((perm): CallPolicyPermission => {
+//     const selector =
+//       perm.selector === "0x" ? "0x00000000" : (perm.selector as `0x${string}`);
+
 //     return {
 //       callType: Number(perm.callType) || 0,
 //       target: perm.target as `0x${string}`,
-//       delegatedKey: (perm.delegatedKey || delegatedEOA) as `0x${string}`,
-//       selector: selector as `0x${string}`,
-//       rules: (perm.rules || []).map((rule: any) => ({
+//       delegatedKey: (perm.delegatedKey || delegatedAddress) as `0x${string}`,
+//       selector,
+//       rules: (perm.rules || []).map((rule: any): PermissionRule => ({
 //         condition: Number(rule.condition) || 0,
 //         offset: BigInt(rule.offset ?? 0),
 //         params: (rule.params || []) as `0x${string}`[],
@@ -91,46 +210,44 @@ export function registerDelegatedRoutes(router: Router): void {
 //   });
 // }
 
+
 // // helper to validate call policy permissions format (we expect specific input format)
-// function validateCallPolicyPermissions(permissions: any[]): string | null {
-//   // RequestCreateDelegateKey shape
-//   if (permissions && (permissions as any).permissions && Array.isArray((permissions as any).permissions)) {
-//     const entries = (permissions as any).permissions;
-//     for (let i = 0; i < entries.length; i++) {
-//       const perm = entries[i]?.permission ?? entries[i];
-//       if (!perm) {
-//         return `permissions.permissions[${i}] is required`;
-//       }
-//       if (perm.callType === undefined || typeof perm.callType !== "number") {
-//         return `permissions.permissions[${i}].callType is required and must be a number (0 or 1)`;
-//       }
-//       if (!perm.target || typeof perm.target !== "string") {
-//         return `permissions.permissions[${i}].target is required and must be a valid Ethereum address`;
-//       }
-//       if (!perm.selector || typeof perm.selector !== "string") {
-//         return `permissions.permissions[${i}].selector is required and must be a 4-byte hex string`;
-//       }
-//     }
-//     return null;
+// function validateCallPolicyPermissions(
+//   permissions: CallPolicyPermission[] | { permissions: any[] }
+// ): string | null {
+//   // Normalize two possible input formats
+//   const entries = Array.isArray((permissions as any).permissions)
+//     ? (permissions as any).permissions.map((p: any) => p?.permission ?? p)
+//     : permissions;
+
+//   if (!Array.isArray(entries)) {
+//     return "permissions must be an array";
 //   }
 
-//   for (let i = 0; i < permissions.length; i++) {
-//     const perm = permissions[i];
-//     if (perm.callType === undefined || typeof perm.callType !== "number") {
-//       return `permissions[${i}].callType is required and must be a number (0 or 1)`;
+//   for (let i = 0; i < entries.length; i++) {
+//     const perm = entries[i];
+//     if (!perm) return `permissions[${i}] is required`;
+
+//     if (typeof perm.callType !== "number") {
+//       return `permissions[${i}].callType is required and must be a number`;
 //     }
-//     if (!perm.target || typeof perm.target !== "string") {
+
+//     if (typeof perm.target !== "string") {
 //       return `permissions[${i}].target is required and must be a valid Ethereum address`;
 //     }
-//     if (!perm.selector || typeof perm.selector !== "string") {
+
+//     if (typeof perm.selector !== "string") {
 //       return `permissions[${i}].selector is required and must be a 4-byte hex string`;
 //     }
+
 //     if (perm.delegatedKey && typeof perm.delegatedKey !== "string") {
 //       return `permissions[${i}].delegatedKey must be a valid Ethereum address if provided`;
 //     }
 //   }
+
 //   return null;
 // }
+
 
 // function validateCallPolicyConfig(config?: CallPolicyConfigInput): string | null {
 //   if (!config) {
@@ -214,7 +331,7 @@ export function registerDelegatedRoutes(router: Router): void {
 // function extractCallPolicyPayload(
 //   permissionsInput: any,
 //   callPolicyConfig: CallPolicyConfigInput | undefined,
-//   delegatedEOA: string
+//   delegatedAddress: string
 // ): NormalizedCallPolicyPayload {
 //   const collectedPermissions: CallPolicyPermission[] = [];
 //   const tokenLimitInputs: TokenLimitInput[] = [];
@@ -235,7 +352,7 @@ export function registerDelegatedRoutes(router: Router): void {
 //       collectedPermissions.push({
 //         callType: Number(perm.callType) || 0,
 //         target: perm.target as `0x${string}`,
-//         delegatedKey: (perm.delegatedKey || delegatedEOA) as `0x${string}`,
+//         delegatedKey: (perm.delegatedKey || delegatedAddress) as `0x${string}`,
 //         selector: (perm.selector === "0x" ? "0x00000000" : perm.selector) as `0x${string}`,
 //         rules: (perm.rules || []).map((rule: any) => ({
 //           condition: Number(rule.condition) || 0,
@@ -258,7 +375,7 @@ export function registerDelegatedRoutes(router: Router): void {
 //       }
 //     }
 //   } else if (Array.isArray(permissionsInput)) {
-//     collectedPermissions.push(...convertToCallPolicyPermissions(permissionsInput, delegatedEOA));
+//     collectedPermissions.push(...convertToCallPolicyPermissions(permissionsInput, delegatedAddress));
 //     permissionsInput.forEach((perm: any) => maybeAddRecipient(perm?.target));
 //   }
 
@@ -788,7 +905,7 @@ export function registerDelegatedRoutes(router: Router): void {
 // async function prepareDelegatedKeyInstallationData(
 //   installationId: string,
 //   delegatedEOA: string,
-//   keyType: "sudo" | "restricted" | "callpolicy",
+//   keyType: PermissionPolicyType,
 //   clientId: string,
 //   kernelAddress: Address,
 //   callPolicyPermissionsArg?: CallPolicyPermission[],
@@ -805,8 +922,8 @@ export function registerDelegatedRoutes(router: Router): void {
 //     // }
 //   };
 
-//   const tokenLimits: NormalizedTokenLimit[] = keyType === "callpolicy" ? normalizedTokenLimits : [];
-//   const recipients: Address[] = keyType === "callpolicy" ? normalizedRecipients : [];
+//   const tokenLimits: NormalizedTokenLimit[] = keyType === PermissionPolicyType.CALL_POLICY ? normalizedTokenLimits : [];
+//   const recipients: Address[] = keyType === PermissionPolicyType.CALL_POLICY ? normalizedRecipients : [];
 
 //   try {
 //     sendStatus({
@@ -824,7 +941,7 @@ export function registerDelegatedRoutes(router: Router): void {
 //     let tokenListData: PrepareDataForSigning | undefined = undefined;
 //     let permissionPolicyType: PermissionPolicyType;
 
-//     if (keyType === "sudo") {
+//     if (keyType === PermissionPolicyType.SUDO) {
 //       permissionPolicyType = PermissionPolicyType.SUDO;
 //       const rootNonceBefore = await getRootCurrentNonce(kernelAddress);
 //       console.log(`[Installation ${installationId}] Root nonce before install: ${rootNonceBefore}`);
@@ -858,7 +975,7 @@ export function registerDelegatedRoutes(router: Router): void {
 
 
 
-//     if (keyType === "callpolicy") {
+//     if (keyType === PermissionPolicyType.CALL_POLICY) {
 //       grantAccessData = await buildGrantAccessUoUnsigned(
 //         kernelAddress,
 //         vId as `0x${string}`,
@@ -1010,3 +1127,119 @@ export function registerDelegatedRoutes(router: Router): void {
 //     };
 //   }
 // }
+
+
+// router.post("/revoke", async (req: Request, res: Response) => {
+//     try {
+//       const { delegatedEOA } = req.body ?? {};
+
+//       if (!delegatedEOA) {
+//         return res.status(400).json({
+//           error: "delegatedEOA is required",
+//           message: "Please provide the delegated EOA address to revoke",
+//         });
+//       }
+
+//       if (!/^0x[a-fA-F0-9]{40}$/.test(delegatedEOA)) {
+//         return res.status(400).json({
+//           error: "Invalid address format",
+//           message: "Please provide a valid Ethereum address (0x...)",
+//         });
+//       }
+
+//       console.log(`[revoke] -> Revoking access for delegated EOA: ${delegatedEOA}`);
+
+//       try {
+//         const prefundResult = await checkPrefundSimple();
+//         if (!prefundResult.hasPrefund) {
+//           console.error(`[revoke] Prefund check failed:`, prefundResult.message);
+//           return res.status(400).json({
+//             error: "Insufficient funds",
+//             message: prefundResult.message,
+//             details: prefundResult.message,
+//           });
+//         }
+//       } catch (prefundError: any) {
+//         console.error(`[revoke] Prefund check failed:`, prefundError);
+//         return res.status(400).json({
+//           error: "Prefund check failed",
+//           message: "Failed to check account balance. Please try again.",
+//           details: prefundError.message,
+//         });
+//       }
+
+//       let unpacked;
+//       let permissionId;
+//       let vId;
+//       let retries = 3;
+//       let lastError: any;
+
+//       while (retries > 0) {
+//         try {
+//           const result = await buildUninstallPermissionUO(delegatedEOA as `0x${string}`);
+//           unpacked = result.unpacked;
+//           permissionId = result.permissionId;
+//           vId = result.vId;
+//           break;
+//         } catch (err: any) {
+//           lastError = err;
+//           const isRateLimit =
+//             err?.status === 429 ||
+//             err?.cause?.status === 429 ||
+//             err?.message?.includes("429") ||
+//             err?.message?.includes("Too Many Requests") ||
+//             err?.details === "Too Many Requests";
+
+//           if (isRateLimit && retries > 1) {
+//             const waitTime = Math.pow(2, 3 - retries) * 1000;
+//             console.warn(`[revoke] Rate limit hit (429), retrying in ${waitTime}ms... (${retries} retries left)`);
+//             await new Promise((resolve) => setTimeout(resolve, waitTime));
+//             retries--;
+//             continue;
+//           } else {
+//             throw err;
+//           }
+//         }
+//       }
+
+//       if (!unpacked || !permissionId || !vId) {
+//         throw lastError || new Error("Failed to build uninstall user operation");
+//       }
+
+//       console.log(`[revoke] -> Permission ID: ${permissionId}`);
+//       console.log(`[revoke] -> vId: ${vId}`);
+
+//       const { txHash } = await sendUserOpV07(unpacked);
+
+//       console.log(`[revoke] -> Revocation transaction sent: ${txHash}`);
+
+//       return res.json({
+//         success: true,
+//         txHash,
+//         message: "Delegated key access revoked successfully",
+//       });
+//     } catch (err: any) {
+//       console.error("[/revoke] error:", err);
+
+//       const isRateLimit =
+//         err?.status === 429 ||
+//         err?.cause?.status === 429 ||
+//         err?.message?.includes("429") ||
+//         err?.message?.includes("Too Many Requests") ||
+//         err?.details === "Too Many Requests";
+
+//       if (isRateLimit) {
+//         return res.status(429).json({
+//           error: "Rate limit exceeded",
+//           message: "Too many requests to the blockchain RPC. Please wait a moment and try again.",
+//           details: "The RPC endpoint (Infura) has rate limits. Please wait a few seconds before retrying.",
+//           retryAfter: 5,
+//         });
+//       }
+
+//       return res.status(500).json({
+//         error: "Revocation failed",
+//         message: err?.message ?? "Failed to revoke delegated key access",
+//         details: err?.message ?? "internal error",
+//       });
+//     }

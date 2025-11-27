@@ -26,6 +26,8 @@ import { TransferOptionsModal } from './components/TransferOptionsModal';
 import { TokenSelectorModal } from './components/TokenSelectorModal';
 import { AddressConfirmationModal } from './components/AddressConfirmationModal';
 import { RestrictedSettings } from './components/RestrictedSettings';
+import { useWallet } from '@/contexts/WalletContext';
+import { validateAndSign } from '@/blockchain-interaction/signUOp';
 
 export default function CreateDelegatedKeyScreen() {
   const [keyType, setKeyType] = useState<KeyType>('restricted');
@@ -37,6 +39,7 @@ export default function CreateDelegatedKeyScreen() {
   const [showAddressConfirmation, setShowAddressConfirmation] = useState(false);
   const [pendingKeyPair, setPendingKeyPair] = useState<WatchKeyPair | null>(null);
   const [isAborting, setIsAborting] = useState(false);
+  const { wallet } = useWallet();
 
   const generatePermissions = (delegatedKey: string) =>
     generateCallPolicyPermissions(
@@ -444,6 +447,7 @@ export default function CreateDelegatedKeyScreen() {
         transferEnabled,
         PREDEFINED_ACTIONS
       );
+      const kernelAddress = wallet!.smartWalletAddress!;
       const requestData = {
         delegatedEOA,
         keyType: keyType === 'restricted' ? 'callpolicy' : keyType,
@@ -451,6 +455,7 @@ export default function CreateDelegatedKeyScreen() {
         permissions: {
           permissions: permissionEntries,
         } as RequestCreateDelegateKey,
+        kernelAddress,
       };
       
       // Log CallPolicy restrictions being sent
@@ -464,7 +469,11 @@ export default function CreateDelegatedKeyScreen() {
       
       const result = await apiClient.createDelegatedKey(requestData);
 
-      console.log('Installation started:', result);
+      if (result.success) {
+        const signedData = await validateAndSign(result)
+      } else {
+        console.error('Installation failed:', result.message);
+      }
 
     } catch (error) {
       console.error('Error starting blockchain operations:', error);
@@ -695,12 +704,16 @@ export default function CreateDelegatedKeyScreen() {
 
       // Step 1: Request key generation from smart watch
       console.log('Step 1: Requesting key generation from smart watch...');
-      let kernelAddress = getKernelAddress();
+      let kernelAddress = wallet?.smartWalletAddress;
       
       // Temporary fallback for debugging
       if (!kernelAddress) {
         console.log('[create-key] -> KERNEL not found in config, using fallback');
-        kernelAddress = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+          Alert.alert(
+            'Configuration error',
+            'Kernel address is not configured. Please set KERNEL in your environment.'
+          );
+          return;
       }
 
       console.log('[create-key] -> kernelAddress:', kernelAddress);

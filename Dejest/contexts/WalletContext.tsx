@@ -1,13 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { savePrivateKey, loadPrivateKey, deletePrivateKey, saveSeedPhrase, loadSeedPhrase, deleteSeedPhrase } from '@/utils/secureStorage';
 import { generateSeedPhrase, validateSeedPhrase, generateWalletAddress, generatePrivateKey, generateWalletAccount, getPrivateKeyFromAccount, mockCryptoData } from '@/utils/crypto';
-import { predictSmartWalletAddress } from '@/utils/walletService';
+// import { predictSmartWalletAddress } from '@/utils/walletService';
 import { apiClient } from '@/utils/apiClient';
+import { clearAllDelegatedKeys } from '@/utils/delegatedKeys';
+import { getWalletAddress } from '@/utils/walletService';
 
 export interface WalletData {
-  seedPhrase: string[];
   address: string;
-  privateKey: string;
   smartWalletAddress?: string;
   isInitialized: boolean;
   createdAt: number;
@@ -51,9 +52,12 @@ interface WalletContextType {
   refreshCryptoData: () => Promise<void>;
   checkWalletExists: () => Promise<boolean>;
   ensureSmartWalletAddress: () => Promise<string>;
+  linkKernelWallet: (address: string) => Promise<void>;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
+
+const WALLET_STORAGE_KEY = 'wallet.dejest';
 
 export const useWallet = () => {
   const context = useContext(WalletContext);
@@ -73,8 +77,57 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  useEffect(() => {
-    loadWallet();
+  const persistWallet = useCallback(
+    async (publicWallet: Omit<WalletData, 'lastAccessed'> & { lastAccessed: number }) => {
+
+      await AsyncStorage.setItem(WALLET_STORAGE_KEY, JSON.stringify(publicWallet));
+    },
+    []
+  );
+
+  const hydrateWalletFromStorage = useCallback(async (): Promise<WalletData | null> => {
+    try {
+      const [storedWallet, storedPrivateKey] = await Promise.all([
+        AsyncStorage.getItem(WALLET_STORAGE_KEY),
+        loadPrivateKey(),
+      ]);
+
+      if (!storedWallet || !storedPrivateKey) {
+        return null;
+      }
+
+      const parsedWallet = JSON.parse(storedWallet);
+      const walletData: WalletData = {
+        address: parsedWallet.address,
+        smartWalletAddress: parsedWallet.smartWalletAddress,
+        isInitialized: parsedWallet.isInitialized ?? true,
+        createdAt: parsedWallet.createdAt ?? Date.now(),
+        lastAccessed: Date.now(),
+      };
+
+      // if (!walletData.smartWalletAddress) {
+      //   try {
+      //     walletData.smartWalletAddress = await predictSmartWalletAddress(storedPrivateKey as `0x${string}`);
+      //   } catch (error) {
+      //     console.error('Error predicting smart wallet address:', error);
+      //   }
+      // }
+
+      const publicWallet = {
+        address: walletData.address,
+        smartWalletAddress: walletData.smartWalletAddress,
+        isInitialized: walletData.isInitialized,
+        createdAt: walletData.createdAt,
+        lastAccessed: walletData.lastAccessed,
+      };
+
+      await AsyncStorage.setItem(WALLET_STORAGE_KEY, JSON.stringify(publicWallet));
+
+      return walletData;
+    } catch (error) {
+      console.error('Error hydrating wallet from storage:', error);
+      return null;
+    }
   }, []);
 
   const fetchRealBalances = useCallback(async (address: string): Promise<CryptoData> => {
@@ -222,41 +275,21 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     }
   }, []);
 
-  const loadWallet = async () => {
+  const loadWallet = useCallback(async () => {
     try {
-      const storedWallet = await AsyncStorage.getItem('wallet');
+      const storedWallet = await hydrateWalletFromStorage();
       if (storedWallet) {
-        const parsedWallet = JSON.parse(storedWallet);
-        
-        // Ensure smart wallet address exists
-        let updatedWallet = { ...parsedWallet };
-        if (!updatedWallet.smartWalletAddress && updatedWallet.privateKey) {
-          try {
-            const smartWalletAddress = await predictSmartWalletAddress(updatedWallet.privateKey as `0x${string}`);
-            updatedWallet.smartWalletAddress = smartWalletAddress;
-          } catch (error) {
-            console.error('Error predicting smart wallet address:', error);
-          }
-        }
-        
-        // Update last accessed time
-        updatedWallet.lastAccessed = Date.now();
-        
-        // Save updated wallet data
-        await AsyncStorage.setItem('wallet', JSON.stringify(updatedWallet));
-        
-        setWallet(updatedWallet);
-        
-        // Fetch real balances
+        setWallet(storedWallet);
+
         try {
-          const address = updatedWallet.smartWalletAddress || updatedWallet.address;
+          const address = storedWallet.smartWalletAddress || storedWallet.address;
           const cryptoData = await fetchRealBalances(address);
           setCryptoData(cryptoData);
         } catch (error) {
           console.error('Error fetching balances, using mock data:', error);
           setCryptoData(mockCryptoData);
         }
-        
+
         setIsAuthenticated(true);
       }
     } catch (error) {
@@ -264,28 +297,38 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [fetchRealBalances, hydrateWalletFromStorage]);
+
+  useEffect(() => {
+    loadWallet();
+  }, [loadWallet]);
 
   const createWallet = async (): Promise<WalletData> => {
     try {
       const seedPhrase = generateSeedPhrase();
+      console.log("seed phrase:", seedPhrase);
+
       const account = generateWalletAccount(seedPhrase);
-      
+      console.log("account:", account);
+
       // Get private key from account
       const privateKey = getPrivateKeyFromAccount(account);
+      console.log("privateKey:", privateKey);
+
+      await savePrivateKey(privateKey);
+      await saveSeedPhrase(seedPhrase);
       
       // Predict smart wallet address
       let smartWalletAddress: string | undefined;
-      try {
-        smartWalletAddress = await predictSmartWalletAddress(privateKey as `0x${string}`);
-      } catch (error) {
-        console.error('Error predicting smart wallet address:', error);
-      }
+      // try {
+      //   smartWalletAddress = await predictSmartWalletAddress(privateKey as `0x${string}`);
+      //   console.log("PREDICTED:", smartWalletAddress)
+      // } catch (error) {
+      //   console.error('Error predicting smart wallet address:', error);
+      // }
       
       const newWallet: WalletData = {
-        seedPhrase,
         address: account.address,
-        privateKey,
         smartWalletAddress,
         isInitialized: true,
         createdAt: Date.now(),
@@ -295,7 +338,7 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
       console.log('newWallet', newWallet);
 
       // Securely store wallet data
-      await AsyncStorage.setItem('wallet', JSON.stringify(newWallet));
+      await persistWallet(newWallet);
       
       setWallet(newWallet);
       setIsAuthenticated(true);
@@ -327,20 +370,21 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
       
       // Get private key from account
       const privateKey = getPrivateKeyFromAccount(account);
+
+      await savePrivateKey(privateKey);
+      await saveSeedPhrase(seedPhrase);
       
       // Predict smart wallet address
       let smartWalletAddress: string | undefined;
-      try {
-        smartWalletAddress = await predictSmartWalletAddress(privateKey as `0x${string}`);
-        console.log('smartWalletAddress', smartWalletAddress);
-      } catch (error) {
-        console.error('Error predicting smart wallet address:', error);
-      }
+      // try {
+      //   smartWalletAddress = await predictSmartWalletAddress(privateKey as `0x${string}`);
+      //   console.log('smartWalletAddress PREDICTED', smartWalletAddress);
+      // } catch (error) {
+      //   console.error('Error predicting smart wallet address:', error);
+      // }
       
       const importedWallet: WalletData = {
-        seedPhrase,
         address: account.address,
-        privateKey,
         smartWalletAddress,
         isInitialized: true,
         createdAt: Date.now(),
@@ -348,7 +392,7 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
       };
 
       // Securely store wallet data
-      await AsyncStorage.setItem('wallet', JSON.stringify(importedWallet));
+      await persistWallet(importedWallet);
       
       setWallet(importedWallet);
       setIsAuthenticated(true);
@@ -373,7 +417,12 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
   const logout = async () => {
     try {
       // Clear all wallet data from secure storage
-      await AsyncStorage.removeItem('wallet');
+      await Promise.all([
+        AsyncStorage.removeItem(WALLET_STORAGE_KEY),
+        deletePrivateKey(),
+        deleteSeedPhrase(),
+        clearAllDelegatedKeys(),
+      ]);
       setWallet(null);
       setCryptoData(null);
       setIsAuthenticated(false);
@@ -384,8 +433,11 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
 
   const checkWalletExists = async (): Promise<boolean> => {
     try {
-      const storedWallet = await AsyncStorage.getItem('wallet');
-      return storedWallet !== null;
+      const [storedWallet, storedPrivateKey] = await Promise.all([
+        AsyncStorage.getItem(WALLET_STORAGE_KEY),
+        loadPrivateKey(),
+      ]);
+      return Boolean(storedWallet && storedPrivateKey);
     } catch (error) {
       console.error('Error checking wallet existence:', error);
       return false;
@@ -396,22 +448,28 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     if (!wallet) {
       throw new Error('No wallet found');
     }
-
     if (wallet.smartWalletAddress) {
       return wallet.smartWalletAddress;
     }
 
+    const privateKey = await loadPrivateKey();
+    if (!privateKey) {
+      throw new Error('No private key found');
+    }
+
     try {
-      const smartWalletAddress = await predictSmartWalletAddress(wallet.privateKey as `0x${string}`);
+      const smartWalletAddress = await getWalletAddress();
       
       // Update wallet with smart wallet address
       const updatedWallet = {
         ...wallet,
         smartWalletAddress,
+        // Use Kernel AA as primary address for the app
+        address: smartWalletAddress,
         lastAccessed: Date.now(),
       };
 
-      await AsyncStorage.setItem('wallet', JSON.stringify(updatedWallet));
+      await persistWallet(updatedWallet);
       setWallet(updatedWallet);
 
       return smartWalletAddress;
@@ -437,6 +495,22 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     }
   }, [wallet, fetchRealBalances]);
 
+  const linkKernelWallet = async (smartAddress: string): Promise<void> => {
+    if (!wallet) {
+      throw new Error('No wallet found');
+    }
+
+    const updatedWallet: WalletData = {
+      ...wallet,
+      smartWalletAddress: smartAddress,
+      address: smartAddress,      // use Kernel as the primary address in the app
+      lastAccessed: Date.now(),
+    };
+
+    await persistWallet(updatedWallet);  // writes to AsyncStorage + keeps secure storage as-is
+    setWallet(updatedWallet);
+  };
+
   const value: WalletContextType = {
     wallet,
     cryptoData,
@@ -448,6 +522,7 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
     refreshCryptoData,
     checkWalletExists,
     ensureSmartWalletAddress,
+    linkKernelWallet,
   };
 
   return (

@@ -77,83 +77,13 @@ class ApiClient {
     }
   }
 
-  // Get current root nonce
-  async getRootNonce(): Promise<NonceResponse> {
-    return this.makeRequest<NonceResponse>('/wallet/nonce/root');
-  }
-
-  // Install permission validation for delegated key
-  async installPermission(delegatedEOA: string): Promise<InstallPermissionResponse> {
-    return this.makeRequest<InstallPermissionResponse>('/wallet/delegated/install', {
-      method: 'POST',
-      body: JSON.stringify({ delegatedEOA }),
-    });
-  }
-
-  // Enable selector for delegated key
-  async enableSelector(
-    permissionId: string,
-    vId: string,
-    delegatedEOA: string
-  ): Promise<EnableSelectorResponse> {
-    return this.makeRequest<EnableSelectorResponse>('/wallet/delegated/enable', {
-      method: 'POST',
-      body: JSON.stringify({ permissionId, vId, delegatedEOA }),
-    });
-  }
-
-  // Grant access to execute selector
-  async grantAccess(vId: string): Promise<GrantAccessResponse> {
-    return this.makeRequest<GrantAccessResponse>('/wallet/delegated/grant', {
-      method: 'POST',
-      body: JSON.stringify({ vId }),
-    });
-  }
-
-  // Uninstall permission validation
-  async uninstallPermission(delegatedEOA: string): Promise<UninstallPermissionResponse> {
-    return this.makeRequest<UninstallPermissionResponse>('/wallet/delegated/uninstall', {
-      method: 'POST',
-      body: JSON.stringify({ delegatedEOA }),
-    });
-  }
-
-  // Prepare user operation (existing functionality)
-  async prepareUserOp(params: {
-    to: string;
-    amountWei: string;
-    data?: string;
-    delegatedEOA: string;
-    kernelAddress: string;
-  }): Promise<UserOpPrepareResponse> {
-    return this.makeRequest<UserOpPrepareResponse>('/wallet/userOp/prepare', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
-  // Broadcast user operation (existing functionality)
-  async broadcastUserOp(params: {
-    to: string;
-    amountWei: string;
-    data?: string;
-    delegatedEOA: string;
-    signature: string;
-    opHash: string;
-    kernelAddress: string;
-  }): Promise<UserOpBroadcastResponse> {
-    return this.makeRequest<UserOpBroadcastResponse>('/wallet/userOp/broadcast', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
-
   // Simplified delegated key creation (new functionality)
   async createDelegatedKey(params: {
-    delegatedEOA: string;
+    delegatedEOA: `0x${string}`;
     keyType: 'sudo' | 'restricted' | 'callpolicy';
     clientId: string;
     permissions: RequestCreateDelegateKey;
+    kernelAddress: string;
   }): Promise<CreateDelegatedKeyResponse> {
     return this.makeRequest<CreateDelegatedKeyResponse>('/wallet/delegated/create', {
       method: 'POST',
@@ -161,30 +91,35 @@ class ApiClient {
     });
   }
 
-  // Check prefund status
-  async checkPrefund(): Promise<PrefundCheckResponse> {
-    try {
-      return await this.makeRequest<PrefundCheckResponse>('/wallet/entrypoint/status');
-    } catch (error) {
-      const trackedError = error instanceof Error ? error.message : 'Unknown prefund error';
-      console.warn('[ApiClient] Prefund check error tracked:', trackedError);
-      return {
-        hasPrefund: false,
-        message: trackedError,
-        error: trackedError,
-        kernelAddress: config.KERNEL,
-        entryPointAddress: config.ENTRY_POINT,
-      };
-    }
-  }
-
   // Revoke delegated key access
-  async revokeKey(delegatedEOA: string): Promise<RevokeKeyResponse> {
+  async revokeKey(delegatedEOA: string, kernelAddress: string): Promise<RevokeKeyResponse> {
     return this.makeRequest<RevokeKeyResponse>('/wallet/revoke', {
       method: 'POST',
-      body: JSON.stringify({ delegatedEOA }),
+      body: JSON.stringify({ delegatedEOA, kernelAddress }),
     });
   }
+
+  async depositToEntryPoint(amountEth: string): Promise<EntryPointDepositResponse> {
+    return this.makeRequest<EntryPointDepositResponse>('/wallet/entrypoint/deposit', {
+      method: 'POST',
+      body: JSON.stringify({ amountEth }),
+    });
+  }
+
+  // Send ETH or ERC20 tokens
+  async sendTransaction(params: {
+    to: string;
+    amount: string;
+    tokenAddress?: string;
+  }): Promise<SendTransactionResponse> {
+    return this.makeRequest<SendTransactionResponse>('/wallet/send', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  // ----------------------- READ ONLY -----------------------
+
 
   // Health check
   async healthCheck(): Promise<{ status: string; timestamp: string; message: string }> {
@@ -210,13 +145,6 @@ class ApiClient {
     });
   }
 
-  async depositToEntryPoint(amountEth: string): Promise<EntryPointDepositResponse> {
-    return this.makeRequest<EntryPointDepositResponse>('/wallet/entrypoint/deposit', {
-      method: 'POST',
-      body: JSON.stringify({ amountEth }),
-    });
-  }
-
   // Get token balances for an address
   async getBalances(address: string): Promise<BalancesResponse> {
     return this.makeRequest<BalancesResponse>(`/wallet/balances?address=${address}`);
@@ -227,16 +155,21 @@ class ApiClient {
     return this.makeRequest<TransactionsResponse>(`/wallet/transactions?address=${address}&limit=${limit}`);
   }
 
-  // Send ETH or ERC20 tokens
-  async sendTransaction(params: {
-    to: string;
-    amount: string;
-    tokenAddress?: string;
-  }): Promise<SendTransactionResponse> {
-    return this.makeRequest<SendTransactionResponse>('/wallet/send', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
+  // Check prefund status
+  async checkPrefund(): Promise<PrefundCheckResponse> {
+    try {
+      return await this.makeRequest<PrefundCheckResponse>('/wallet/entrypoint/status');
+    } catch (error) {
+      const trackedError = error instanceof Error ? error.message : 'Unknown prefund error';
+      console.warn('[ApiClient] Prefund check error tracked:', trackedError);
+      return {
+        hasPrefund: false,
+        message: trackedError,
+        error: trackedError,
+        kernelAddress: config.KERNEL,
+        entryPointAddress: config.ENTRY_POINT,
+      };
+    }
   }
 }
 

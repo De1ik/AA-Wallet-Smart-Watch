@@ -1,8 +1,8 @@
-import { createPublicClient, http, parseAbi, parseEther } from "viem";
+import { Address, createPublicClient, http, parseAbi, parseEther } from "viem";
 import { sepolia } from "viem/chains";
 
 import { getCurrentGasPrices, getOptimizedGasLimits } from "../utils/native-code";
-import { ENTRY_POINT_ADDRESS, ETH_RPC_URL, KERNEL_ADDRESS } from "./wallet.constants";
+import { ENTRY_POINT_ADDRESS, ETH_RPC_URL } from "./wallet.constants";
 
 export interface PrefundStatus {
   hasPrefund: boolean;
@@ -17,10 +17,9 @@ export interface PrefundStatus {
 const entryPointAbi = parseAbi(["function balanceOf(address account) view returns (uint256)"]);
 
 // Check prefund for the given kernel address
-export async function checkPrefundSimple(): Promise<PrefundStatus> {
+export async function checkPrefundSimple(kernelAddress: Address): Promise<PrefundStatus> {
   try {
-    // TODO: Replace with dynamic addresses after testing
-    const kernelAddress = KERNEL_ADDRESS;
+    // Use dynamic kernel if provided, otherwise fall back to default
     const entryPointAddress = ENTRY_POINT_ADDRESS;
 
     const publicClient = createPublicClient({ chain: sepolia, transport: http(ETH_RPC_URL) });
@@ -83,7 +82,7 @@ export async function checkPrefundSimple(): Promise<PrefundStatus> {
       depositWei: "0",
       requiredPrefundWei: "0",
       shortfallWei: "0",
-      kernelAddress: KERNEL_ADDRESS,
+      kernelAddress,
       entryPointAddress: ENTRY_POINT_ADDRESS,
     };
   }
