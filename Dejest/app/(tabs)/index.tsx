@@ -105,7 +105,7 @@ export default function DashboardScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.headerTitle}>Dashboard</Text>
-            <Text style={styles.welcomeText}>Welcome back, Alex</Text>
+            <Text style={styles.welcomeText}>Welcome back</Text>
             <TouchableOpacity
               onPress={() => {
                 const address = wallet?.smartWalletAddress || wallet?.address;

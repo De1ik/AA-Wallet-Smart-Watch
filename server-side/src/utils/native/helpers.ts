@@ -1,9 +1,10 @@
 import { Address, Hex, concat, encodeAbiParameters, encodeFunctionData, getFunctionSelector, keccak256, pad, toHex } from "viem";
 
-import { CALL_POLICY, ECDSA_SIGNER, KERNEL, SUDO_POLICY } from "./constants";
+import { CALL_POLICY, ECDSA_SIGNER, SUDO_POLICY } from "./constants";
 import { kernelAbi } from "./abi";
 import { publicClient } from "./clients";
 import { CallPolicyPermission } from "./types";
+import { checkPrefundSimple } from "../../routes/wallet.prefund";
 
 export const EXECUTE_USER_OP_SELECTOR: Hex = getFunctionSelector(
   "function executeUserOp((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes) userOp, bytes32 userOpHash)"
@@ -33,14 +34,14 @@ export function encodeSingle(target: Address, value: bigint, callData: Hex): Hex
   return ("0x" + addr20 + value32 + callData.slice(2)) as Hex;
 }
 
-export async function rootHookRequiresPrefix(): Promise<boolean> {
+export async function rootHookRequiresPrefix(kernelAddress: Address): Promise<boolean> {
   const vId = (await publicClient.readContract({
-    address: KERNEL,
+    address: kernelAddress,
     abi: kernelAbi,
     functionName: "rootValidator",
   })) as Hex;
   const [, hook] = (await publicClient.readContract({
-    address: KERNEL,
+    address: kernelAddress,
     abi: kernelAbi,
     functionName: "validationConfig",
     args: [vId],
@@ -155,3 +156,25 @@ export function getVId(permissionId: Hex) {
   const vId = vIdFromPermissionId(permissionId);
   return vId;
 }
+
+export function generateInstallationId(): string {
+  return Math.random().toString(36).substring(7);
+}
+
+
+export async function checkPrefundSafe(kernel: Address, id: string) {
+  try {
+    const prefund = await checkPrefundSimple(kernel);
+    if (!prefund.hasPrefund) {
+      return { error: true, message: prefund.message };
+    }
+    return { error: false };
+  } catch (err: any) {
+    return { error: true, message: err.message };
+  }
+}
+
+
+
+
+

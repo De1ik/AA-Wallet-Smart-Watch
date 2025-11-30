@@ -103,7 +103,6 @@ class WalletBridge: RCTEventEmitter, WCSessionDelegate {
 
   @objc func getAccountData(_ resolve: @escaping RCTPromiseResolveBlock,
                             rejecter reject: @escaping RCTPromiseRejectBlock) {
-    // Можешь заменить на получение реальных данных из Keychain / WalletManager
     let dummy: [String: Any] = [
       "balance": "0.0",
       "address": "0x0000000000000000000000000000000000000000",

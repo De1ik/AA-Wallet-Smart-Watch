@@ -27,7 +27,13 @@ import {
   const ETH_RPC_URL          = 'https://sepolia.infura.io/v3/7df085afafad4becaad36c48fb162932'
   
   // root / delegated
-  const ROOT_PRIV       = getPrivateKey() ?? '0x5b90e4bb58e7731445eb523f9409e4b47f29f5356cf7df6873559623e60761e0'
+  console.log("%%%%%".repeat(20));
+  console.log("%%%%%".repeat(20));
+  console.log("getPrivateKey()");
+  console.log(getPrivateKey());
+  console.log("%%%%%".repeat(20));
+  console.log("%%%%%".repeat(20));
+  const ROOT_PRIV       = '0x5b90e4bb58e7731445eb523f9409e4b47f29f5356cf7df6873559623e60761e0'
   // const DELEGATED_PK    = '0x20383bc29b876e46b53b71e40c132ebecc6dc5747c79f6017c24813d999e1e8b'
   const DELEGATED_PK    = '0xeb020020f40c89748cfbcd6f455d3251ee5aa201237553c31bc7353a8b6dadfa'
   const delegated       = privateKeyToAccount(DELEGATED_PK as Hex)

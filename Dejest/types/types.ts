@@ -1,3 +1,6 @@
+import { PackedUserOperation, UnpackedUserOperationV07 } from "@/blockchain-interaction/types";
+import { Address, Hex } from "viem";
+
 export enum CallType {
   CALLTYPE_SINGLE = 0,
   CALLTYPE_BATCH = 1,
@@ -230,4 +233,59 @@ export interface SendTransactionResponse {
   txHash: string;
   message: string;
   error?: string;
+}
+
+
+
+//  ------------------ new added --------------
+
+export enum PermissionPolicyType {
+  SUDO = 0,
+  CALL_POLICY = 1,
+}
+
+export interface SignedDataForDelegateInstallation {
+  unpacked: UnpackedUserOperationV07;
+  signature: Hex;
+}
+
+export interface PrepareDataForSigning {
+  unpacked: UnpackedUserOperationV07;
+  packed: PackedUserOperation;
+  userOpHash: Hex;
+}
+
+
+export interface InstallPrepareSuccess {
+  success: boolean;
+  installationId: string;
+  data: {  
+    permissionPolicyType: PermissionPolicyType;
+    unsignedPermissionPolicyData: PrepareDataForSigning;
+    unsignedGrantAccessData: PrepareDataForSigning;
+    unsignedRecipientListData?: PrepareDataForSigning;
+    unsignedTokenListData?: PrepareDataForSigning;
+  };                     
+  message: string;
+}
+
+export interface ExecuteDelegateInstallation {
+  permissionPolicyType: PermissionPolicyType;
+  signedPermissionPolicyData: SignedDataForDelegateInstallation;
+  signedGrantAccessData: SignedDataForDelegateInstallation;
+  signedRecipientListData?: SignedDataForDelegateInstallation;
+  signedTokenListData?: SignedDataForDelegateInstallation;
+}
+
+export interface InstallExecuteInput {
+  data: ExecuteDelegateInstallation;
+  clientId: string;
+  kernelAddress: Address;
+  installationId: string;
+}
+
+export interface InstallExecuteSuccess {
+  success: boolean;
+  installationId: string;
+  message: string;
 }

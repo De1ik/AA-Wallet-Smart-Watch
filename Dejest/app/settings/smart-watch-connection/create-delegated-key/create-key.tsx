@@ -4,14 +4,14 @@ import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { apiClient } from '@/utils/apiClient';
+import { apiClient } from '@/utils/api-client/apiClient';
 import { wsClient } from '@/utils/websocketClient';
-import { KeyType, TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey, CallPolicyPermission, CallPolicyParamRule, CallPolicyParamCondition, PredefinedAction, CallPolicySettings, TokenOption, TokenSelection } from '@/utils/delegatedKeys';
+import { TokenLimit, DelegatedKeyData, saveDelegatedKey, updateDelegatedKey, CallPolicyPermission, CallPolicyParamRule, CallPolicyParamCondition, PredefinedAction, CallPolicySettings, TokenOption, TokenSelection } from '@/utils/delegatedKeys';
 import { useSmartWatch } from '@/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData, smartWatchBridge } from '@/utils/smartWatchBridge';
 import { getKernelAddress } from '@/utils/config';
 import { installationState } from '@/utils/installationState';
-import { PermissionTokenEntry, RequestCreateDelegateKey } from '@/types/types';
+import { ExecuteDelegateInstallation, InstallExecuteSuccess, InstallPrepareSuccess, PermissionPolicyType, PermissionTokenEntry, RequestCreateDelegateKey, SignedDataForDelegateInstallation } from '@/types/types';
 import { buildPermissionTokenEntries as buildPermissionTokenEntriesHelper, generateCallPolicyPermissions, logCallPolicyDebug, TransferOptions } from './callPolicyBuilders';
 import { PREDEFINED_ACTIONS, SUPPORTED_TOKENS } from '@/constants/appConstants';
 import { styles } from './styles';
@@ -26,9 +26,14 @@ import { TransferOptionsModal } from './components/TransferOptionsModal';
 import { TokenSelectorModal } from './components/TokenSelectorModal';
 import { AddressConfirmationModal } from './components/AddressConfirmationModal';
 import { RestrictedSettings } from './components/RestrictedSettings';
+import { useWallet } from '@/contexts/WalletContext';
+import { processUnsigned, validateAndSign } from '@/blockchain-interaction/signUOp';
+import { ErrorResponse, InstallExecuteInput, InstallPrepareInput } from '@/utils/api-client/apiTypes';
+import { debugLog, isInstallPrepareSuccess } from '@/utils/api-client/helpers';
+import { Address } from 'viem';
 
 export default function CreateDelegatedKeyScreen() {
-  const [keyType, setKeyType] = useState<KeyType>('restricted');
+  const [keyType, setKeyType] = useState<PermissionPolicyType>(PermissionPolicyType.CALL_POLICY);
   const [deviceName, setDeviceName] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [showSudoWarning, setShowSudoWarning] = useState(false);
@@ -37,6 +42,7 @@ export default function CreateDelegatedKeyScreen() {
   const [showAddressConfirmation, setShowAddressConfirmation] = useState(false);
   const [pendingKeyPair, setPendingKeyPair] = useState<WatchKeyPair | null>(null);
   const [isAborting, setIsAborting] = useState(false);
+  const { wallet } = useWallet();
 
   const generatePermissions = (delegatedKey: string) =>
     generateCallPolicyPermissions(
@@ -86,19 +92,19 @@ export default function CreateDelegatedKeyScreen() {
 
   // ----------------- HANDLERS -----------------
 
-  const handleKeyTypeSelect = (type: KeyType) => {
-    if (type === 'sudo') {
+  const handleKeyTypeSelect = (type: PermissionPolicyType) => {
+    if (type === PermissionPolicyType.SUDO) {
       setShowSudoWarning(true);
     } else {
       setKeyType(type);
-      if (type === 'restricted') {
+      if (type === PermissionPolicyType.CALL_POLICY) {
         setShowCallPolicySettings(true); // Use CallPolicy settings for restricted
       }
     }
   };
 
   const handleSudoWarningConfirm = () => {
-    setKeyType('sudo');
+    setKeyType(PermissionPolicyType.SUDO);
     setShowSudoWarning(false);
   };
 
@@ -129,7 +135,7 @@ export default function CreateDelegatedKeyScreen() {
         installationStatus: 'installing',
         installationProgress: {
           currentStep: 'Initializing blockchain operations...',
-          totalSteps: keyType === 'sudo' ? 3 : 4, // sudo: install, grant, save | restricted: install, enable, grant, save
+          totalSteps: keyType === PermissionPolicyType.SUDO ? 3 : 4, // sudo: install, grant, save | restricted: install, enable, grant, save
           completedSteps: 0,
         },
       };
@@ -339,8 +345,8 @@ export default function CreateDelegatedKeyScreen() {
 
   // Validation for Restricted settings (using CallPolicy)
   const isRestrictedValid = () => {
-    if (keyType !== 'restricted') return true;
-    
+    if (keyType !== PermissionPolicyType.CALL_POLICY) return true;
+
     const numTxValue = parseFloat(callPolicySettings.maxValuePerTx);
     const numDayValue = parseFloat(callPolicySettings.maxValuePerDay);
     const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
@@ -411,7 +417,7 @@ export default function CreateDelegatedKeyScreen() {
 
       // Check prefund first (track errors instead of throwing)
       try {
-        const prefundCheck = await apiClient.checkPrefund();
+        const prefundCheck = await apiClient.checkPrefund(wallet?.smartWalletAddress);
         if (!prefundCheck.hasPrefund) {
           const prefundMessage =
             prefundCheck.message ||
@@ -444,27 +450,101 @@ export default function CreateDelegatedKeyScreen() {
         transferEnabled,
         PREDEFINED_ACTIONS
       );
-      const requestData = {
-        delegatedEOA,
-        keyType: keyType === 'restricted' ? 'callpolicy' : keyType,
+      const kernelAddress = wallet!.smartWalletAddress!;
+      const requestData: InstallPrepareInput = {
+        delegatedAddress: delegatedEOA,
+        keyType,
         clientId,
         permissions: {
           permissions: permissionEntries,
         } as RequestCreateDelegateKey,
+        kernelAddress,
       };
       
       // Log CallPolicy restrictions being sent
-      if (keyType === 'restricted') {
+      if (keyType === PermissionPolicyType.CALL_POLICY) {
         logCallPolicyDebug(keyType, callPolicySettings, transferOptions, transferEnabled, permissionEntries.map(p => ({
           ...p.permission,
           valueLimit: p.tokenLimitEntry.limit.txLimit,
           dailyLimit: p.tokenLimitEntry.limit.dailyLimit
         })), PREDEFINED_ACTIONS);
       }
-      
-      const result = await apiClient.createDelegatedKey(requestData);
 
-      console.log('Installation started:', result);
+      debugLog(`[CreateKey] Sending installation prepare request for device ${deviceId}:`, requestData);
+      
+      const result: InstallPrepareSuccess | ErrorResponse  = await apiClient.prepareDelegatedKeyInstall(requestData);
+
+      debugLog(`[CreateKey] Installation prepare result for device ${deviceId}:`, result);
+
+      if (!isInstallPrepareSuccess(result)) {
+        console.error("Installation failed:", result.error);
+        return;
+      }
+      
+      const {
+        permissionPolicyType,
+        unsignedPermissionPolicyData,
+        unsignedGrantAccessData,
+        unsignedRecipientListData,
+        unsignedTokenListData,
+      } = result.data;
+
+      debugLog(`PERMISSION POLICY DATA:`, unsignedPermissionPolicyData);
+      
+      // Always required blocks
+      const signedPermissionPolicyData = await processUnsigned(unsignedPermissionPolicyData, "unsignedPermissionPolicyData") as SignedDataForDelegateInstallation;
+      if (!signedPermissionPolicyData) {
+        console.log("Failed to sign permission policy data");
+        return;
+      }
+      const signedGrantAccessData = await processUnsigned(unsignedGrantAccessData, "unsignedGrantAccessData") as SignedDataForDelegateInstallation;
+      if (!signedGrantAccessData) {
+        console.log("Failed to sign grant access data");
+        return;
+      }
+
+      // Optional for CALL_POLICY
+      let signedRecipientListData: SignedDataForDelegateInstallation | undefined;
+      let signedTokenListData: SignedDataForDelegateInstallation | undefined;
+
+      // if call policy, process optional blocks
+      if (permissionPolicyType === PermissionPolicyType.CALL_POLICY) {
+        if (unsignedRecipientListData) {
+          signedRecipientListData = await processUnsigned(unsignedRecipientListData, "unsignedRecipientListData") as SignedDataForDelegateInstallation;
+        }
+        if (!signedRecipientListData) {
+          console.log("Failed to sign recipient list data");
+          return;
+        }
+        if (unsignedTokenListData) {
+          signedTokenListData = await processUnsigned(unsignedTokenListData, "unsignedTokenListData") as SignedDataForDelegateInstallation;
+        }
+        if (!signedTokenListData) {
+          console.log("Failed to sign token list data");
+          return;
+        }
+      }
+
+      const executeDelegateInstallation: ExecuteDelegateInstallation = {
+        permissionPolicyType,
+        signedPermissionPolicyData,
+        signedGrantAccessData,
+        signedRecipientListData,
+        signedTokenListData,
+      };
+
+      const installPrepareInput: InstallExecuteInput = { 
+        data: executeDelegateInstallation,
+        clientId: clientId!,
+        kernelAddress: kernelAddress! as Address,
+        installationId: result.installationId, 
+      }
+
+
+      const resultInstallation: InstallExecuteSuccess | ErrorResponse  = await apiClient.executeDelegatedKeyInstall(installPrepareInput);
+
+      debugLog(`[CreateKey] Installation result for device ${deviceId}:`, resultInstallation);
+
 
     } catch (error) {
       console.error('Error starting blockchain operations:', error);
@@ -490,7 +570,7 @@ export default function CreateDelegatedKeyScreen() {
         createdAt: new Date().toISOString(),
         installationStatus: 'completed', // Mark as completed
         installationProgress: undefined, // Clear progress data when completed
-        ...(keyType === 'restricted' && {
+        ...(keyType === PermissionPolicyType.CALL_POLICY && {
           callPolicyPermissions: generatePermissions(keyPair.address)
         })
       };
@@ -515,8 +595,8 @@ export default function CreateDelegatedKeyScreen() {
 
       await syncPermissionData(watchPermissionData);
       console.log('Permission data synced to smart watch successfully!');
-      
-      const keyTypeDisplay = keyType === 'sudo' ? 'Sudo Access' : keyType === 'restricted' ? 'Restricted Access' : 'CallPolicy Access';
+
+      const keyTypeDisplay = keyType === PermissionPolicyType.SUDO ? 'Sudo Access' : keyType === PermissionPolicyType.CALL_POLICY ? 'Restricted Access' : 'CallPolicy Access';
       Alert.alert(
         'Success!',
         `Delegated key created successfully for ${deviceName}.\n\nKey Type: ${keyTypeDisplay}\nPublic Key: ${keyPair.address.slice(0, 10)}...\n\nYour smart watch can now perform transactions on your behalf.`,
@@ -627,7 +707,7 @@ export default function CreateDelegatedKeyScreen() {
     }
 
     // Validate Restricted settings (using CallPolicy)
-    if (keyType === 'restricted') {
+    if (keyType === PermissionPolicyType.CALL_POLICY) {
       const numTxValue = parseFloat(callPolicySettings.maxValuePerTx);
       const numDayValue = parseFloat(callPolicySettings.maxValuePerDay);
       const hasTransferAction = callPolicySettings.allowedActions.includes('transfer') && transferEnabled;
@@ -695,18 +775,22 @@ export default function CreateDelegatedKeyScreen() {
 
       // Step 1: Request key generation from smart watch
       console.log('Step 1: Requesting key generation from smart watch...');
-      let kernelAddress = getKernelAddress();
+      let kernelAddress = wallet?.smartWalletAddress;
       
       // Temporary fallback for debugging
       if (!kernelAddress) {
         console.log('[create-key] -> KERNEL not found in config, using fallback');
-        kernelAddress = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+          Alert.alert(
+            'Configuration error',
+            'Kernel address is not configured. Please set KERNEL in your environment.'
+          );
+          return;
       }
 
       console.log('[create-key] -> kernelAddress:', kernelAddress);
       
       // Prepare whitelist data if it's a restricted key type
-      const whitelist = keyType === 'restricted' && callPolicySettings.allowedTargets.length > 0
+      const whitelist = keyType === PermissionPolicyType.CALL_POLICY && callPolicySettings.allowedTargets.length > 0
         ? callPolicySettings.allowedTargets.map(target => ({ name: target.name, address: target.address }))
         : undefined;
       

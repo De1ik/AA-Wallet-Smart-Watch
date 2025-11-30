@@ -3,8 +3,8 @@ import { createPublicClient, http, parseAbi, parseEther } from "viem";
 import { sepolia } from "viem/chains";
 
 import {
-  buildSendRootUO,
-  buildSendTokenUO,
+  buildSendRootUoUnsigned,
+  buildSendTokenUoUnsigned,
   fetchAllTokenBalances,
   fetchTransactionHistory,
   sendUserOpV07,
@@ -135,7 +135,7 @@ export function registerAccountRoutes(router: Router): void {
 
   router.post("/send", async (req: Request, res: Response) => {
     try {
-      const { to, amount, tokenAddress } = req.body;
+      const { to, amount, tokenAddress, kernelAddress } = req.body;
 
       if (!to || typeof to !== "string") {
         return res.status(400).json({
@@ -170,6 +170,8 @@ export function registerAccountRoutes(router: Router): void {
 
       let txHash: string;
 
+      let packed, unpacked, userOpHash;
+
       if (tokenAddress) {
         if (!/^0x[a-fA-F0-9]{40}$/.test(tokenAddress)) {
           return res.status(400).json({
@@ -188,29 +190,28 @@ export function registerAccountRoutes(router: Router): void {
 
         console.log(`[Send] Building ERC20 transfer: ${amount} * 10^${decimals} = ${amountInWei.toString()}`);
 
-        const { unpacked } = await buildSendTokenUO(
+        const result = await buildSendTokenUoUnsigned(
           tokenAddress as `0x${string}`,
           to as `0x${string}`,
           amountInWei,
+          kernelAddress,
           0
         );
-
-        ({ txHash } = await sendUserOpV07(unpacked));
+        ({ packed, unpacked, userOpHash } = result);
       } else {
         const amountInWei = parseEther(amount);
 
         console.log(`[Send] Building ETH transfer: ${amount} ETH = ${amountInWei.toString()} wei`);
 
-        const { unpacked } = await buildSendRootUO(to as `0x${string}`, amountInWei, "0x", 0);
-
-        ({ txHash } = await sendUserOpV07(unpacked));
+        const result = await buildSendRootUoUnsigned(to as `0x${string}`, amountInWei, "0x", kernelAddress, 0);
+        ({ packed, unpacked, userOpHash } = result);
       }
-
-      console.log(`[Send] Transaction sent successfully: ${txHash}`);
 
       return res.json({
         success: true,
-        txHash,
+        data: {
+          packed, unpacked, userOpHash
+        },
         message: tokenAddress ? "Token transfer initiated" : "ETH transfer initiated",
       });
     } catch (err: any) {

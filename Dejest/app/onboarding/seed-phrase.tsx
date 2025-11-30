@@ -1,17 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { shouldSkipSeed } from '@/utils/config';
+import { loadSeedPhrase } from '@/utils/secureStorage';
 
 export default function SeedPhraseScreen() {
-  const { seedPhrase } = useLocalSearchParams();
-  const [isRevealed, setIsRevealed] = useState(false);
+  const [words, setWords] = useState<string[]>([]);
+  const skipSeed = shouldSkipSeed();
+  const [isRevealed, setIsRevealed] = useState(() => skipSeed);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  const words = seedPhrase ? JSON.parse(seedPhrase as string) : [];
-  const skipSeed = shouldSkipSeed();
+  useEffect(() => {
+    (async () => {
+      const seedPhrase = await loadSeedPhrase();
+      setWords(seedPhrase ?? []);
+    })();
+  }, []);
+  const canContinue = skipSeed || isRevealed;
 
   const copyToClipboard = async (word: string, index: number) => {
     try {
@@ -24,16 +31,20 @@ export default function SeedPhraseScreen() {
   };
 
   const handleContinue = () => {
-    if (skipSeed) {
-      // Skip verification and go directly to main app
-      router.replace('/(tabs)');
-    } else {
-      // Normal flow: go to verification
-      router.push({
-        pathname: '/onboarding/verify-seed-phrase',
-        params: { seedPhrase: JSON.stringify(words) }
-      });
+    if (!isRevealed && !skipSeed) {
+      toggleReveal();
+      return;
     }
+
+    if (skipSeed) {
+      router.replace('/onboarding/create-kernel');
+      return;
+    }
+
+    router.push({
+      pathname: '/onboarding/verify-seed-phrase',
+      params: { seedPhrase: JSON.stringify(words) }
+    });
   };
 
   const toggleReveal = () => {
@@ -140,9 +151,10 @@ export default function SeedPhraseScreen() {
         {/* Action Button */}
         <View style={styles.buttonContainer}>
           <TouchableOpacity
-            style={[styles.continueButton, !isRevealed && styles.continueButtonDisabled]}
+            style={[styles.continueButton, !canContinue && styles.continueButtonDisabled]}
             onPress={handleContinue}
-            disabled={!isRevealed}
+            // Keep enabled so we can prompt the reveal alert on press
+            disabled={false}
           >
             <Text style={styles.continueButtonText}>
               {skipSeed ? 'Continue' : 'I\'ve Written It Down'}
@@ -315,4 +327,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

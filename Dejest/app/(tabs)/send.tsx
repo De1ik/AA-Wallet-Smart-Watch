@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useWallet } from '@/contexts/WalletContext';
-import { apiClient } from '@/utils/apiClient';
+import { apiClient } from '@/utils/api-client/apiClient';
 
 // Token addresses on Sepolia
 const TOKEN_ADDRESSES: Record<string, { address: string; decimals: number }> = {

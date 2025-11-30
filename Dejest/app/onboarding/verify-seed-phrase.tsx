@@ -3,12 +3,21 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { shouldSkipSeed } from '@/utils/config';
 
 export default function VerifySeedPhraseScreen() {
   const { seedPhrase } = useLocalSearchParams();
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
   const [availableWords, setAvailableWords] = useState<string[]>([]);
   const [isComplete, setIsComplete] = useState(false);
+  const skipSeed = shouldSkipSeed();
+
+  console.log("***".repeat(30));
+  console.log("***".repeat(30));
+  console.log("SKIP_SEED:", skipSeed)
+  console.log("***".repeat(30));
+  console.log("***".repeat(30));
+
 
   const correctWords = seedPhrase ? JSON.parse(seedPhrase as string) : [];
 
@@ -41,14 +50,14 @@ export default function VerifySeedPhraseScreen() {
   const verifySeedPhrase = () => {
     const isCorrect = selectedWords.every((word, index) => word === correctWords[index]);
     
-    if (isCorrect) {
+    if (isCorrect || skipSeed) {
       Alert.alert(
         'Success!',
         'Your seed phrase has been verified. Your wallet is now ready to use.',
         [
           {
             text: 'Continue',
-            onPress: () => router.replace('/(tabs)')
+            onPress: () => router.replace('/onboarding/create-kernel')
           }
         ]
       );
@@ -148,7 +157,7 @@ export default function VerifySeedPhraseScreen() {
           <TouchableOpacity
             style={[styles.verifyButton, !isComplete && styles.verifyButtonDisabled]}
             onPress={verifySeedPhrase}
-            disabled={!isComplete}
+            disabled={!isComplete && !skipSeed}
           >
             <Text style={styles.verifyButtonText}>
               Verify Seed Phrase
@@ -310,4 +319,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

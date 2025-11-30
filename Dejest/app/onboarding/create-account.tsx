@@ -4,18 +4,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useWallet } from '@/contexts/WalletContext';
+import { loadPrivateKey, loadSeedPhrase } from '@/utils/secureStorage';
 
 export default function CreateAccountScreen() {
   const { createWallet } = useWallet();
   const [isCreating, setIsCreating] = useState(false);
 
   const handleCreateWallet = async () => {
+    
     try {
       setIsCreating(true);
       const wallet = await createWallet();
+      console.log(wallet)
+      console.log("Seed: ", await loadSeedPhrase());
+      console.log("Pk: ", await loadPrivateKey());
       router.push({
         pathname: '/onboarding/seed-phrase',
-        params: { seedPhrase: JSON.stringify(wallet.seedPhrase) }
       });
     } catch (error) {
       Alert.alert('Error', 'Failed to create wallet. Please try again.');

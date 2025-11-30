@@ -1,6 +1,5 @@
+import { PermissionPolicyType } from '@/types/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-export type KeyType = 'sudo' | 'restricted' | 'callpolicy';
 
 export interface TokenLimit {
   tokenAddress: string;
@@ -78,7 +77,7 @@ export type InstallationStatus = 'installing' | 'granting' | 'completed' | 'fail
 export interface DelegatedKeyData {
   id: string;
   deviceName: string;
-  keyType: KeyType;
+  keyType: PermissionPolicyType;
   permissionId: string;
   vId: string;
   publicAddress: string;

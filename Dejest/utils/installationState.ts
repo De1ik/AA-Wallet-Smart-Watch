@@ -1,12 +1,13 @@
 import { wsClient } from './websocketClient';
-import { InstallationStatus } from './apiClient';
+import { InstallationStatus } from './api-client/apiClient';
 import { DelegatedKeyData, updateDelegatedKey } from './delegatedKeys';
+import { PermissionPolicyType } from '@/types/types';
 
 export interface GlobalInstallationState {
   isInstalling: boolean;
   deviceId: string | null;
   deviceName: string | null;
-  keyType: 'sudo' | 'restricted' | 'callpolicy' | null;
+  keyType: PermissionPolicyType;
   status: InstallationStatus | null;
   progress: number;
   currentStep: string;
@@ -47,7 +48,7 @@ class InstallationStateManager {
   }
 
   // Start installation tracking
-  startInstallation(deviceId: string, deviceName: string, keyType: 'sudo' | 'restricted' | 'callpolicy') {
+  startInstallation(deviceId: string, deviceName: string, keyType: PermissionPolicyType) {
     console.log('[InstallationState] Starting installation tracking:', { deviceId, deviceName, keyType });
     
     this.updateState({

@@ -1,24 +1,22 @@
 import {
   Address,
   Hex,
-  concat,
   decodeAbiParameters,
   encodeAbiParameters,
   encodeFunctionData,
   keccak256,
   parseAbi,
-  parseAbiParameters,
   toHex,
+  
 } from "viem";
 
 import {
   CALL_POLICY,
   ENTRY_POINT,
-  HOOK_SENTINEL,
-  KERNEL,
-  delegated,
-  root,
+  HOOK_SENTINEL
 } from "./constants";
+
+import { PackedUserOperation as u1 } from "viem/_types/account-abstraction";
 
 import {
   buildCallPolicyValidationData,
@@ -39,6 +37,8 @@ import { bundlerClient, publicClient } from "./clients";
 import { callPolicyAbi, entryPointAbi, kernelAbi, kernelAbiGrant, kernelInstallValidationsAbi, stakeAbi } from "./abi";
 import { getCurrentGasPrices, getOptimizedGasLimits } from "./gas";
 import { CallPolicyPermission, PackedUserOperation, UnpackedUserOperationV07 } from "./types";
+import { applyZeroDevPaymaster } from "../paymaster";
+import { debugLog } from "./delegateKey/helper";
 
 export interface SendUserOpResult {
   txHash: Hex;
@@ -185,14 +185,18 @@ export async function sendUserOpV07(unpacked: UnpackedUserOperationV07, maxWaitT
   throw new UserOpExecutionError("Timed out waiting for user operation receipt", timeoutResult);
 }
 
-export async function buildDepositUserOp(depositAmount: bigint, _nonceKey = 0) {
+export async function buildDepositUserOpUnsigned(depositAmount: bigint, kernelAddress: Address, _nonceKey = 0) {
   const depositCalldata = encodeFunctionData({
     abi: stakeAbi,
     functionName: "depositTo",
-    args: [KERNEL],
+    args: [kernelAddress],
   });
   const execData = encodeSingle(ENTRY_POINT, depositAmount, depositCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("install");
@@ -205,12 +209,12 @@ export async function buildDepositUserOp(depositAmount: bigint, _nonceKey = 0) {
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
+    args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   const nonceFull = nonce64;
 
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -220,15 +224,9 @@ export async function buildDepositUserOp(depositAmount: bigint, _nonceKey = 0) {
     paymasterAndData: "0x",
     signature: "0x",
   };
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -236,90 +234,44 @@ export async function buildDepositUserOp(depositAmount: bigint, _nonceKey = 0) {
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
+    // paymaster: "0x",
+    // // paymasterVerificationGasLimit: "0x0",
+    // // paymasterPostOpGasLimit: "0x0",
+    // paymasterData: "0x",
   };
+
+  const sponsor = await applyZeroDevPaymaster(unpacked);
+  debugLog("[Paymaster] Applied to deposit UO", sponsor);
+  debugLog("[Paymaster 2] Applied to deposit UO 2", sponsor.paymasterData);
+
+  // packed.paymasterAndData = sponsor.paymasterData!;
+  // unpacked.paymaster = sponsor.paymaster!;
+  // unpacked.paymasterData = sponsor.paymasterData!;
+
+  debugLog("[Paymaster 3] Applied to deposit UO 3", packed);
+
+  const userOpHash = (await publicClient.readContract({
+    address: ENTRY_POINT,
+    abi: entryPointAbi,
+    functionName: "getUserOpHash",
+    args: [packed],
+  })) as Hex;
+
+  debugLog("[Paymaster4] USER OP HASH", userOpHash);
+
   return { packed, unpacked, userOpHash };
 }
 
-export async function buildUpdatePermissionLimitsUO(
-  policyId: Hex,
-  wallet: Address,
-  callType: number,
-  target: Address,
-  selector: Hex,
-  newValueLimit: bigint,
-  newDailyLimit: bigint
-) {
-  // await publicClient.readContract({ address: KERNEL, abi: kernelAbi, functionName: "currentNonce" });
-
-  // const policyId32 = pad(policyId, { size: 32 }) as Hex;
-
-  // const updateCalldata = encodeFunctionData({
-  //   abi: callPolicyAbi,
-  //   functionName: "updatePermissionLimits",
-  //   args: [policyId32, wallet, callType, target, selector, newValueLimit, newDailyLimit],
-  // });
-
-  // const execData = encodeSingle(CALL_POLICY, 0n, updateCalldata);
-  // const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
-
-  // const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
-  // const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("update");
-
-  // const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
-  // const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
-
-  // const key192 = ("0x" + "00".repeat(24)) as Hex;
-  // const nonce64 = (await publicClient.readContract({
-  //   address: ENTRY_POINT,
-  //   abi: entryPointAbi,
-  //   functionName: "getNonce",
-  //   args: [KERNEL, BigInt(key192)],
-  // })) as bigint;
-
-  // const packed: PackedUserOperation = {
-  //   sender: KERNEL,
-  //   nonce: nonce64,
-  //   initCode: "0x",
-  //   callData,
-  //   accountGasLimits,
-  //   preVerificationGas,
-  //   gasFees,
-  //   paymasterAndData: "0x",
-  //   signature: "0x",
-  // };
-
-  // const userOpHash = (await publicClient.readContract({
-  //   address: ENTRY_POINT,
-  //   abi: entryPointAbi,
-  //   functionName: "getUserOpHash",
-  //   args: [packed],
-  // })) as Hex;
-
-  // const unpacked: UnpackedUserOperationV07 = {
-  //   sender: KERNEL,
-  //   nonce: toHex(nonce64),
-  //   callData,
-  //   callGasLimit: toHex(callGasLimit),
-  //   verificationGasLimit: toHex(verificationGasLimit),
-  //   preVerificationGas: toHex(preVerificationGas),
-  //   maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
-  //   maxFeePerGas: toHex(maxFeePerGas),
-  //   signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
-  // };
-
-  // return { unpacked };
-}
-
-
 // Set token limits (multiple tokens) for a given wallet in CallPolicy
-export async function buildSetTokenLimitUO(
+export async function buildSetTokenLimitUoUnsigned(
   policyId: Hex,
   wallet: Address,
   tokens: Address[],     
   enabled: boolean[],   
   txLimits: bigint[],  
-  dailyLimits: bigint[]
+  dailyLimits: bigint[],
+  nonceToAdd: number = 0
 ) {
   const policyId32 = padPolicyId(policyId);
 
@@ -330,7 +282,11 @@ export async function buildSetTokenLimitUO(
   });
 
   const execData = encodeSingle(CALL_POLICY, 0n, updateCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(wallet),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("update");
@@ -339,12 +295,12 @@ export async function buildSetTokenLimitUO(
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   const key192 = ("0x" + "00".repeat(24)) as Hex;
-  const nonce64 = (await publicClient.readContract({
+  const nonce64 = ((await publicClient.readContract({
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
     args: [wallet, BigInt(key192)],
-  })) as bigint;
+  })) + BigInt(nonceToAdd)) as bigint;
 
   const packed: PackedUserOperation = {
     sender: wallet,
@@ -374,19 +330,20 @@ export async function buildSetTokenLimitUO(
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
 
-  return { unpacked };
+  return { packed, unpacked, userOpHash };
 }
 
 
 // Set recipient allowed (multiple recipients) for a given wallet in CallPolicy
-export async function buildSetRecipientAllowedUO(
+export async function buildSetRecipientAllowedUoUnsigned(
   policyId: Hex, 
   wallet: Address, 
   recipients: Address[], 
-  allowed: boolean[]
+  allowed: boolean[],
+  nonceToAdd: number = 0
 ) {
   const policyId32 = padPolicyId(policyId);
 
@@ -397,7 +354,11 @@ export async function buildSetRecipientAllowedUO(
   });
 
   const execData = encodeSingle(CALL_POLICY, 0n, updateCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(wallet),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("update");
@@ -411,7 +372,7 @@ export async function buildSetRecipientAllowedUO(
     abi: entryPointAbi,
     functionName: "getNonce",
     args: [wallet, BigInt(key192)],
-  })) as bigint;
+  }) + BigInt(nonceToAdd)) as bigint;
 
   const packed: PackedUserOperation = {
     sender: wallet,
@@ -441,15 +402,19 @@ export async function buildSetRecipientAllowedUO(
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
 
-  return { unpacked };
+  return { unpacked, packed, userOpHash };
 }
 
-export async function buildSendRootUO(target: Address, value: bigint, data: Hex = "0x", _nonceKey = 0) {
+export async function buildSendRootUoUnsigned(target: Address, value: bigint, data: Hex = "0x", kernelAddress: Address, _nonceKey = 0) {
   const execData = encodeSingle(target, value, data);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("install");
@@ -462,12 +427,12 @@ export async function buildSendRootUO(target: Address, value: bigint, data: Hex 
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
+    args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   const nonceFull = nonce64;
 
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -485,7 +450,7 @@ export async function buildSendRootUO(target: Address, value: bigint, data: Hex 
   })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -493,12 +458,12 @@ export async function buildSendRootUO(target: Address, value: bigint, data: Hex 
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
   return { packed, unpacked, userOpHash };
 }
 
-export async function buildSendTokenUO(tokenAddress: Address, to: Address, amount: bigint, _nonceKey = 0) {
+export async function buildSendTokenUoUnsigned(tokenAddress: Address, to: Address, amount: bigint, kernelAddress: Address, _nonceKey = 0) {
   const erc20Abi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]);
 
   const transferCalldata = encodeFunctionData({
@@ -508,7 +473,11 @@ export async function buildSendTokenUO(tokenAddress: Address, to: Address, amoun
   });
 
   const execData = encodeSingle(tokenAddress, 0n, transferCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("install");
@@ -521,12 +490,12 @@ export async function buildSendTokenUO(tokenAddress: Address, to: Address, amoun
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
+    args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   const nonceFull = nonce64;
 
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -545,7 +514,7 @@ export async function buildSendTokenUO(tokenAddress: Address, to: Address, amoun
   })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -553,20 +522,20 @@ export async function buildSendTokenUO(tokenAddress: Address, to: Address, amoun
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
 
   return { packed, unpacked, userOpHash };
 }
 
-export async function buildInstallPermissionUO(delegatedEOA: Address) {
+export async function buildInstallPermissionUoUnsigned(kernelAddress: Address, delegatedEOA: Address, nonceToAdd: number = 0) {
   const permissionId = (keccak256(
     encodeAbiParameters(
       [
         { type: "address" },
         { type: "address" },
       ],
-      [KERNEL, delegatedEOA]
+      [kernelAddress, delegatedEOA]
     )
   ) as Hex).slice(0, 10) as Hex;
 
@@ -574,7 +543,7 @@ export async function buildInstallPermissionUO(delegatedEOA: Address) {
   const validationData = buildPermissionValidationData(delegatedEOA);
 
   const current = (await publicClient.readContract({
-    address: KERNEL,
+    address: kernelAddress,
     abi: kernelAbi,
     functionName: "currentNonce",
   })) as number;
@@ -584,8 +553,12 @@ export async function buildInstallPermissionUO(delegatedEOA: Address) {
     functionName: "installValidations",
     args: [[vId], [{ nonce: current, hook: HOOK_SENTINEL }], [validationData], ["0x"]],
   });
-  const execData = encodeSingle(KERNEL, 0n, installCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const execData = encodeSingle(kernelAddress, 0n, installCalldata);
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("install");
@@ -598,12 +571,12 @@ export async function buildInstallPermissionUO(delegatedEOA: Address) {
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
-  })) as bigint;
+    args: [kernelAddress, BigInt(key192)],
+  }) + BigInt(nonceToAdd)) as bigint;
   const nonceFull = nonce64;
 
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -621,7 +594,7 @@ export async function buildInstallPermissionUO(delegatedEOA: Address) {
   })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -629,13 +602,18 @@ export async function buildInstallPermissionUO(delegatedEOA: Address) {
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
-  return { unpacked, permissionId, vId };
+  return { unpacked, packed, userOpHash, permissionId, vId };
 }
 
 // Install CallPolicy with specific permissions for delegatedEOA
-export async function buildInstallCallPolicyUO(delegatedEOA: Address, permissions: CallPolicyPermission[]) {
+export async function buildInstallCallPolicyUoUnsigned(
+  kernelAddress: Address,
+  delegatedEOA: Address,
+  permissions: CallPolicyPermission[],
+  nonceToAdd: number = 0
+) {
   
   // create permissionId based on KERNEL and delegatedEOA
   const permissionId = (keccak256(
@@ -644,34 +622,20 @@ export async function buildInstallCallPolicyUO(delegatedEOA: Address, permission
         { type: "address" },
         { type: "address" },
       ],
-      [KERNEL, delegatedEOA]
+      [kernelAddress, delegatedEOA]
     )
   ) as Hex).slice(0, 10) as Hex;
-
-  console.log("delegatedEOA:", delegatedEOA)
-  console.log("****".repeat(30));
-  console.log("****".repeat(30));
-  console.log("permissionId:", permissionId)
-  console.log("****".repeat(30));
-  console.log("****".repeat(30));
 
   // derive vId from permissionId (internal identifier)
   const vId = vIdFromPermissionId(permissionId);
   const validationData = buildCallPolicyValidationData(delegatedEOA, permissions);
-
-  console.log("****".repeat(30));
-  console.log("****".repeat(30));
-  console.log("validationData:")
-  console.log(validationData)
-  console.log("****".repeat(30));
-  console.log("****".repeat(30));
 
   // // build validation data for CallPolicy with provided permissions
   // const validationData = buildCallPolicyValidationData(delegatedEOA, permissions, pad(permissionId, { size: 32 }) as Hex);
 
   // get current nonce from KERNEL contract
   const current = (await publicClient.readContract({
-    address: KERNEL,
+    address: kernelAddress,
     abi: kernelAbi,
     functionName: "currentNonce",
   })) as number;
@@ -684,8 +648,12 @@ export async function buildInstallCallPolicyUO(delegatedEOA: Address, permission
   });
 
   // encode execution data for the KERNEL contract
-  const execData = encodeSingle(KERNEL, 0n, installCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const execData = encodeSingle(kernelAddress, 0n, installCalldata);
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   // get gas price per transaction
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
@@ -700,13 +668,13 @@ export async function buildInstallCallPolicyUO(delegatedEOA: Address, permission
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
-  })) as bigint;
+    args: [kernelAddress, BigInt(key192)],
+  }) + BigInt(nonceToAdd)) as bigint;
   const nonceFull = nonce64;
 
   // create the packed data without signature
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -727,7 +695,7 @@ export async function buildInstallCallPolicyUO(delegatedEOA: Address, permission
 
   // signe with the root
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -735,101 +703,24 @@ export async function buildInstallCallPolicyUO(delegatedEOA: Address, permission
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
-  };
-  return { unpacked, permissionId, vId };
-}
-
-export async function buildEnableSelectorUO(permissionId: Hex, vId: Hex, _delegatedEOA: Address, selector: Hex) {
-  const id20 = identifierWithoutTypeFromPermissionId(permissionId);
-
-  const key192 = encodeAsNonceKey(0x01, 0x02, id20, 0);
-  const nonce64 = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getNonce",
-    args: [KERNEL, key192],
-  })) as bigint;
-  const nonceFull = encodeAsNonce(0x01, 0x02, id20, 0, nonce64);
-
-  const validatorData = "0x";
-  const hookData = "0x";
-  const selectorData = selector;
-
-  const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
-  const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("enable");
-
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
-  const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
-
-  const packed: PackedUserOperation = {
-    sender: KERNEL,
-    nonce: nonceFull,
-    initCode: "0x",
-    callData: "0x",
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
     signature: "0x",
   };
-
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
-
-  const delSig = (await delegated.signMessage({ message: { raw: userOpHash } })) as Hex;
-  const userOpSigPermission = buildPermissionUserOpSig(delSig, 1);
-
-  const current = (await publicClient.readContract({
-    address: KERNEL,
-    abi: kernelAbi,
-    functionName: "currentNonce",
-  })) as number;
-  const [vNonce] = (await publicClient.readContract({
-    address: KERNEL,
-    abi: kernelAbi,
-    functionName: "validationConfig",
-    args: [vId],
-  })) as [number, Address];
-
-  const enableSig = (await root.signMessage({ message: { raw: userOpHash } })) as Hex;
-
-  const hook20 = ("0x" + HOOK_SENTINEL.slice(2)) as Hex;
-  const enablePacked = concat([
-    hook20,
-    encodeAbiParameters(
-      parseAbiParameters("bytes enableSig, bytes userOpSig, bytes validatorData, bytes hookData, bytes selectorData"),
-      [enableSig, userOpSigPermission, validatorData, hookData, selectorData]
-    ),
-  ]);
-
-  const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
-    nonce: toHex(nonceFull),
-    callData: "0x",
-    callGasLimit: toHex(callGasLimit),
-    verificationGasLimit: toHex(verificationGasLimit),
-    preVerificationGas: toHex(preVerificationGas),
-    maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
-    maxFeePerGas: toHex(maxFeePerGas),
-    signature: enablePacked,
-  };
-  return { unpacked };
+  return { unpacked, packed, userOpHash, permissionId, vId };
 }
 
-export async function buildGrantAccessUO(vId: Hex, selector: Hex, isGrant: boolean) {
+export async function buildGrantAccessUoUnsigned(kernelAddress: Address, vId: Hex, selector: Hex, isGrant: boolean, nonceToAdd: number = 0) {
   const grantCalldata = encodeFunctionData({
     abi: kernelAbiGrant,
     functionName: "grantAccess",
     args: [vId, selector, isGrant],
   });
 
-  const execData = encodeSingle(KERNEL, 0n, grantCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const execData = encodeSingle(kernelAddress, 0n, grantCalldata);
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("grant");
@@ -842,12 +733,12 @@ export async function buildGrantAccessUO(vId: Hex, selector: Hex, isGrant: boole
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
-  })) as bigint;
+    args: [kernelAddress, BigInt(key192)],
+  }) + BigInt(nonceToAdd)) as bigint;
   const nonceFull = nonce64;
 
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -866,7 +757,7 @@ export async function buildGrantAccessUO(vId: Hex, selector: Hex, isGrant: boole
   })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -874,10 +765,10 @@ export async function buildGrantAccessUO(vId: Hex, selector: Hex, isGrant: boole
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
 
-  return { unpacked, userOpHash };
+  return { unpacked, packed, userOpHash };
 }
 
 // generate UserOperation signed by delegated key
@@ -912,7 +803,7 @@ export async function buildDelegatedSendUO(
 
   // create execution call for kernel (kernel.execute(target, value, data))
   const execCalldata = encodeSingle(target, value, data);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execCalldata, await rootHookRequiresPrefix());
+  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execCalldata, await rootHookRequiresPrefix(kernelAddress));
 
   // read gas limits
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
@@ -923,7 +814,7 @@ export async function buildDelegatedSendUO(
 
   // packed data without signature
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -971,14 +862,14 @@ function padPolicyId(policyId: Hex): Hex {
   return ("0x" + body.padEnd(64, "0")) as Hex;
 }
 
-export async function buildUninstallPermissionUO(delegatedEOA: Address) {
+export async function buildUninstallPermissionUoUnsigned(kernelAddress: Address, delegatedEOA: Address) {
   const permissionId = (keccak256(
     encodeAbiParameters(
       [
         { type: "address" },
         { type: "address" },
       ],
-      [KERNEL, delegatedEOA]
+      [kernelAddress, delegatedEOA]
     )
   ) as Hex).slice(0, 10) as Hex;
 
@@ -990,8 +881,12 @@ export async function buildUninstallPermissionUO(delegatedEOA: Address) {
     functionName: "uninstallValidation",
     args: [vId, disableData, "0x"],
   });
-  const execData = encodeSingle(KERNEL, 0n, uninstallCalldata);
-  const callData = buildExecuteCallData(EXEC_MODE_SIMPLE_SINGLE, execData, await rootHookRequiresPrefix());
+  const execData = encodeSingle(kernelAddress, 0n, uninstallCalldata);
+  const callData = buildExecuteCallData(
+    EXEC_MODE_SIMPLE_SINGLE,
+    execData,
+    await rootHookRequiresPrefix(kernelAddress),
+  );
 
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("uninstall");
@@ -1004,12 +899,12 @@ export async function buildUninstallPermissionUO(delegatedEOA: Address) {
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
+    args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   const nonceFull = nonce64;
 
   const packed: PackedUserOperation = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: nonceFull,
     initCode: "0x",
     callData,
@@ -1027,7 +922,7 @@ export async function buildUninstallPermissionUO(delegatedEOA: Address) {
   })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
-    sender: KERNEL,
+    sender: kernelAddress,
     nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
@@ -1035,9 +930,9 @@ export async function buildUninstallPermissionUO(delegatedEOA: Address) {
     preVerificationGas: toHex(preVerificationGas),
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
-    signature: (await root.signMessage({ message: { raw: userOpHash } })) as Hex,
+    signature: "0x",
   };
-  return { unpacked, permissionId, vId };
+  return { unpacked, packed, userOpHash };
 }
 
 export async function checkPrefund(userOp: PackedUserOperation | UnpackedUserOperationV07) {
@@ -1084,13 +979,13 @@ export async function checkPrefund(userOp: PackedUserOperation | UnpackedUserOpe
   }
 }
 
-export async function getRootCurrentNonce() {
+export async function getRootCurrentNonce(kernelAddress: Address) {
   const key192 = ("0x" + "00".repeat(24)) as Hex;
   const nonce64 = (await publicClient.readContract({
     address: ENTRY_POINT,
     abi: entryPointAbi,
     functionName: "getNonce",
-    args: [KERNEL, BigInt(key192)],
+    args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   return nonce64;
 }

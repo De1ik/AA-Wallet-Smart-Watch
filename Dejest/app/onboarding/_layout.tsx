@@ -8,6 +8,7 @@ export default function OnboardingLayout() {
       <Stack.Screen name="import-wallet" options={{ headerShown: false }} />
       <Stack.Screen name="seed-phrase" options={{ headerShown: false }} />
       <Stack.Screen name="verify-seed-phrase" options={{ headerShown: false }} />
+      <Stack.Screen name="create-kernel" options={{ headerShown: false }} />
     </Stack>
   );
 }

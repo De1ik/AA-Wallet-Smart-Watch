@@ -3,12 +3,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert, Modal } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { apiClient } from '@/utils/apiClient';
-import { PrefundCheckResponse } from '@/types/types';
-import { formatEther } from 'viem';
-import { getEntryPointAddress, getKernelAddress } from '@/utils/config';
+import { apiClient } from '@/utils/api-client/apiClient';
+import { PrefundCheckResponse, PrepareDataForSigning, SignedDataForDelegateInstallation } from '@/types/types';
+import { Address, formatEther } from 'viem';
+import { getEntryPointAddress } from '@/utils/config';
+import { debugLog, isDepositExecuteSuccess, isDepositPrepareSuccess } from '@/utils/api-client/helpers';
+import { processUnsigned } from '@/blockchain-interaction/signUOp';
+import { ErrorResponse, executedEntryPointDeposit, prepareEntryPointDeposit } from '@/utils/api-client/apiTypes';
+import { useWallet } from '@/contexts/WalletContext';
 
-const FALLBACK_KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+// const FALLBACK_KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
 const FALLBACK_ENTRY_POINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
 const ENTRY_POINT_ADDRESS = getEntryPointAddress() || FALLBACK_ENTRY_POINT;
 
@@ -27,6 +31,7 @@ const formatEthValue = (value?: string) => {
 
 export default function EntryPointScreen() {
   const [status, setStatus] = useState<PrefundCheckResponse | null>(null);
+  const { wallet } = useWallet();
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDepositing, setIsDepositing] = useState(false);
@@ -50,7 +55,7 @@ export default function EntryPointScreen() {
   const loadStatus = useCallback(async () => {
     try {
       setIsRefreshing(true);
-      const result = await apiClient.checkPrefund();
+      const result = await apiClient.checkPrefund(wallet?.smartWalletAddress);
       setStatus(result);
       setLastUpdated(Date.now());
     } catch (error) {
@@ -109,28 +114,55 @@ export default function EntryPointScreen() {
       setIsDepositing(true);
       closeResultModal();
       console.log('[EntryPoint] Attempting deposit of', depositAmount, 'ETH');
-      const response = await apiClient.depositToEntryPoint(depositAmount);
-      console.log('[EntryPoint] Deposit response:', response);
-      
-      if (response.success) {
-        showResultModal({
-          success: true,
-          title: 'Deposit Confirmed',
-          message: response.message || 'Deposit transaction sent.',
-          txHash: response.txHash,
-          gasUsed: response.gasUsed,
-        });
-        await loadStatus();
-      } else {
+
+
+      const response: prepareEntryPointDeposit | ErrorResponse = await apiClient.prepareDepositToEntryPoint({
+        amountEth: depositAmount,
+        kernelAddress: kernelAddress as Address,
+      });
+
+      debugLog("response prepare deposit", response);
+
+
+      if (!isDepositPrepareSuccess(response)) {
+        console.error("Installation failed:", response.error);
+        return;
+      }
+
+      const signedDepositEntrypoint = await processUnsigned(response.data, "unsignedPermissionPolicyData") as SignedDataForDelegateInstallation;
+      if (!signedDepositEntrypoint) {
+        console.log("Failed to sign permission policy data");
+        return;
+      }
+
+      debugLog("BEFORE response execute deposit", signedDepositEntrypoint);
+
+      const resultDeposit: executedEntryPointDeposit | ErrorResponse  = await apiClient.executeDepositToEntryPoint(signedDepositEntrypoint);
+
+      debugLog("response execute deposit", resultDeposit  );
+
+      if (!isDepositExecuteSuccess(resultDeposit)) {
+        console.error("Installation failed:", resultDeposit.error);
         showResultModal({
           success: false,
           title: 'Deposit Failed',
-          message: response.message || response.error || 'Unable to deposit to EntryPoint.',
-          txHash: response.txHash,
-          gasUsed: response.gasUsed,
-          revertReason: response.revertReason || response.error,
+          message: resultDeposit.error || 'Unable to deposit to EntryPoint.',
+          // txHash: resultDeposit.data.txHash,
+          // gasUsed: resultDeposit.data.gasUsed,
+          // revertReason: resultDeposit.data.revertReason || response.error,
         });
+        return;
+      } else {
+        showResultModal({
+          success: true,
+          title: 'Deposit Confirmed',
+          message: resultDeposit.message || 'Deposit transaction sent.',
+          txHash: resultDeposit.data.txHash,
+          gasUsed: resultDeposit.data.gasUsed,
+        });
+        await loadStatus();
       }
+
     } catch (error: any) {
       console.error('[EntryPoint] Deposit failed:', error);
       console.error('[EntryPoint] Error details:', error?.response?.data || error?.message);
@@ -154,8 +186,8 @@ export default function EntryPointScreen() {
     }
   };
 
-  const configuredKernel = getKernelAddress() || FALLBACK_KERNEL;
-  const kernelAddress = status?.kernelAddress ?? configuredKernel;
+
+  const kernelAddress = wallet?.smartWalletAddress;
   const entryPointAddress = status?.entryPointAddress ?? ENTRY_POINT_ADDRESS;
   const shortfallExists = status?.shortfallWei && status.shortfallWei !== '0';
 

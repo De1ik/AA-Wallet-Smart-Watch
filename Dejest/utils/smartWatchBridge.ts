@@ -1,3 +1,4 @@
+import { PermissionPolicyType } from '@/types/types';
 import { Platform, NativeModules, NativeEventEmitter } from 'react-native';
 
 // TypeScript interfaces for the native bridge
@@ -27,7 +28,7 @@ export interface WatchPermissionData {
   permissionId: string;
   vId: string;
   deviceName: string;
-  keyType: 'restricted' | 'sudo' | 'callpolicy';
+  keyType: PermissionPolicyType;
   createdAt: string;
   allowedTokens?: {
     address: string;
@@ -225,7 +226,7 @@ export function validatePermissionData(data: WatchPermissionData): boolean {
     data.permissionId &&
     data.vId &&
     data.deviceName &&
-    (data.keyType === 'restricted' || data.keyType === 'sudo') &&
+    (Object.values(PermissionPolicyType).includes(data.keyType)) &&
     data.createdAt
   );
 }
