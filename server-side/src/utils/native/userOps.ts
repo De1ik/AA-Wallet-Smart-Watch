@@ -16,6 +16,8 @@ import {
   HOOK_SENTINEL
 } from "./constants";
 
+import { PackedUserOperation as u1 } from "viem/_types/account-abstraction";
+
 import {
   buildCallPolicyValidationData,
   buildExecuteCallData,
@@ -35,6 +37,8 @@ import { bundlerClient, publicClient } from "./clients";
 import { callPolicyAbi, entryPointAbi, kernelAbi, kernelAbiGrant, kernelInstallValidationsAbi, stakeAbi } from "./abi";
 import { getCurrentGasPrices, getOptimizedGasLimits } from "./gas";
 import { CallPolicyPermission, PackedUserOperation, UnpackedUserOperationV07 } from "./types";
+import { applyZeroDevPaymaster } from "../paymaster";
+import { debugLog } from "./delegateKey/helper";
 
 export interface SendUserOpResult {
   txHash: Hex;
@@ -220,12 +224,6 @@ export async function buildDepositUserOpUnsigned(depositAmount: bigint, kernelAd
     paymasterAndData: "0x",
     signature: "0x",
   };
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
     sender: kernelAddress,
@@ -237,7 +235,31 @@ export async function buildDepositUserOpUnsigned(depositAmount: bigint, kernelAd
     maxPriorityFeePerGas: toHex(maxPriorityFeePerGas),
     maxFeePerGas: toHex(maxFeePerGas),
     signature: "0x",
+    // paymaster: "0x",
+    // // paymasterVerificationGasLimit: "0x0",
+    // // paymasterPostOpGasLimit: "0x0",
+    // paymasterData: "0x",
   };
+
+  const sponsor = await applyZeroDevPaymaster(unpacked);
+  debugLog("[Paymaster] Applied to deposit UO", sponsor);
+  debugLog("[Paymaster 2] Applied to deposit UO 2", sponsor.paymasterData);
+
+  // packed.paymasterAndData = sponsor.paymasterData!;
+  // unpacked.paymaster = sponsor.paymaster!;
+  // unpacked.paymasterData = sponsor.paymasterData!;
+
+  debugLog("[Paymaster 3] Applied to deposit UO 3", packed);
+
+  const userOpHash = (await publicClient.readContract({
+    address: ENTRY_POINT,
+    abi: entryPointAbi,
+    functionName: "getUserOpHash",
+    args: [packed],
+  })) as Hex;
+
+  debugLog("[Paymaster4] USER OP HASH", userOpHash);
+
   return { packed, unpacked, userOpHash };
 }
 

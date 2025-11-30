@@ -7,6 +7,11 @@ import { WebSocketService } from "./services/websocket";
 
 console.log("Starting backend...");
 
+// Allow JSON.stringify to handle BigInt by emitting strings
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
 dotenv.config();
 
 const app = express();

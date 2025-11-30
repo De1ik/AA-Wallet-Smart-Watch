@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getDelegatedKeys, removeDelegatedKey, DelegatedKeyData, removeStuckInstallations, clearAllDelegatedKeys, updateDelegatedKey, saveDelegatedKey } from '@/utils/delegatedKeys';
-import { apiClient } from '@/utils/apiClient';
+import { apiClient } from '@/utils/api-client/apiClient';
 import { installationState, GlobalInstallationState } from '@/utils/installationState';
 import { getKernelAddress } from '@/utils/config';
 

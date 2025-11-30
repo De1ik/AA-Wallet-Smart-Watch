@@ -1,5 +1,5 @@
 import { CallPolicyPermission, CallPolicySettings, TokenSelection } from '@/utils/delegatedKeys';
-import { PermissionTokenEntry } from '@/types/types';
+import { PermissionPolicyType, PermissionTokenEntry } from '@/types/types';
 
 export type TransferOptions = { eth: boolean; erc20: boolean };
 
@@ -151,7 +151,7 @@ export function buildPermissionTokenEntries(
 }
 
 export function logCallPolicyDebug(
-  keyType: string,
+  keyType: PermissionPolicyType,
   callPolicySettings: CallPolicySettings,
   transferOptions: TransferOptions,
   transferEnabled: boolean,

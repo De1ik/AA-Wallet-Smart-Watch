@@ -1,5 +1,5 @@
-import { AllPermissionsPerDelegatedKey, RequestCreateDelegateKey } from '@/types/types';
-import { config } from './config';
+import { AllPermissionsPerDelegatedKey, InstallExecuteSuccess, InstallPrepareSuccess, PermissionPolicyType, PrepareDataForSigning, RequestCreateDelegateKey, SignedDataForDelegateInstallation } from '@/types/types';
+import { config } from '../config';
 
 import { 
   ApiResponse,
@@ -22,6 +22,7 @@ import {
   SendTransactionResponse,
   CallPolicyResponse
 } from '@/types/types';
+import { EntryPointDepositPrepareInput, ErrorResponse, executedEntryPointDeposit, InstallExecuteInput, InstallPrepareInput, prepareEntryPointDeposit } from './apiTypes';
 
 
 
@@ -77,19 +78,19 @@ class ApiClient {
     }
   }
 
-  // Simplified delegated key creation (new functionality)
-  async createDelegatedKey(params: {
-    delegatedEOA: `0x${string}`;
-    keyType: 'sudo' | 'restricted' | 'callpolicy';
-    clientId: string;
-    permissions: RequestCreateDelegateKey;
-    kernelAddress: string;
-  }): Promise<CreateDelegatedKeyResponse> {
-    return this.makeRequest<CreateDelegatedKeyResponse>('/wallet/delegated/create', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  }
+  // // Simplified delegated key creation (new functionality)
+  // async createDelegatedKey(params: {
+  //   delegatedEOA: `0x${string}`;
+  //   keyType: 'sudo' | 'restricted' | 'callpolicy';
+  //   clientId: string;
+  //   permissions: RequestCreateDelegateKey;
+  //   kernelAddress: string;
+  // }): Promise<CreateDelegatedKeyResponse> {
+  //   return this.makeRequest<CreateDelegatedKeyResponse>('/wallet/delegated/create', {
+  //     method: 'POST',
+  //     body: JSON.stringify(params),
+  //   });
+  // }
 
   // Revoke delegated key access
   async revokeKey(delegatedEOA: string, kernelAddress: string): Promise<RevokeKeyResponse> {
@@ -99,12 +100,40 @@ class ApiClient {
     });
   }
 
-  async depositToEntryPoint(amountEth: string): Promise<EntryPointDepositResponse> {
-    return this.makeRequest<EntryPointDepositResponse>('/wallet/entrypoint/deposit', {
+
+    // Simplified delegated key creation (new functionality)
+  async prepareDelegatedKeyInstall(params: InstallPrepareInput): Promise<InstallPrepareSuccess | ErrorResponse> {
+    return this.makeRequest<InstallPrepareSuccess | ErrorResponse>('/wallet/delegated/install/prepare-data', {
       method: 'POST',
-      body: JSON.stringify({ amountEth }),
+      body: JSON.stringify(params),
     });
   }
+
+  async executeDelegatedKeyInstall(params: InstallExecuteInput): Promise<InstallPrepareSuccess | ErrorResponse> {
+    return this.makeRequest<InstallPrepareSuccess | ErrorResponse>('/wallet/delegated/install/execute', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+
+  async prepareDepositToEntryPoint(params: EntryPointDepositPrepareInput): Promise<prepareEntryPointDeposit | ErrorResponse> {
+    return this.makeRequest<prepareEntryPointDeposit | ErrorResponse>('/wallet/entrypoint/deposit/prepare-data', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async executeDepositToEntryPoint(params: SignedDataForDelegateInstallation): Promise<executedEntryPointDeposit | ErrorResponse> {
+    return this.makeRequest<executedEntryPointDeposit | ErrorResponse>('/wallet/entrypoint/deposit/execute', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+
+
+
 
   // Send ETH or ERC20 tokens
   async sendTransaction(params: {
@@ -156,9 +185,10 @@ class ApiClient {
   }
 
   // Check prefund status
-  async checkPrefund(): Promise<PrefundCheckResponse> {
+  async checkPrefund(kernelAddress?: string): Promise<PrefundCheckResponse> {
     try {
-      return await this.makeRequest<PrefundCheckResponse>('/wallet/entrypoint/status');
+      const addr = kernelAddress || config.KERNEL;
+      return await this.makeRequest<PrefundCheckResponse>(`/wallet/entrypoint/status?kernelAddress=${addr}`);
     } catch (error) {
       const trackedError = error instanceof Error ? error.message : 'Unknown prefund error';
       console.warn('[ApiClient] Prefund check error tracked:', trackedError);
@@ -166,7 +196,7 @@ class ApiClient {
         hasPrefund: false,
         message: trackedError,
         error: trackedError,
-        kernelAddress: config.KERNEL,
+        kernelAddress: kernelAddress || config.KERNEL,
         entryPointAddress: config.ENTRY_POINT,
       };
     }

@@ -133,9 +133,14 @@ function getSelectorName(selector: string): string {
 }
 
 async function checkNonceUpdated(kernelAddress: Address, rootNonceBefore: bigint): Promise<boolean> {
+  
+  debugLog(`[executeUserOp] Checking nonce update for kernel: ${kernelAddress}...`);
+  debugLog(`[executeUserOp] Root nonce before: ${rootNonceBefore}`);
+  
   let counter = 0;
   while (counter < 5) {
     const rootNonceAfter = await getRootCurrentNonce(kernelAddress);
+    debugLog(`[executeUserOp] Root nonce after attempt ${counter + 1}: ${rootNonceAfter}`);
 
     if (rootNonceAfter > rootNonceBefore) {
       return true;
@@ -144,4 +149,11 @@ async function checkNonceUpdated(kernelAddress: Address, rootNonceBefore: bigint
     counter++;
   }
   return false;
+}
+
+
+export function debugLog(msg?: string, ...optionalParams: any[]) {
+    console.log("***".repeat(20));
+    console.log(`[API-CLIENT-DEBUG]: ${msg}`, ...optionalParams);
+    console.log("***".repeat(20));
 }

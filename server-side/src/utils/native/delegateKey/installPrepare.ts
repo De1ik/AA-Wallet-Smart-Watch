@@ -1,9 +1,9 @@
 import { Address } from "viem";
-import { badRequest, HttpResult, internalError, ok } from "../../apiResponse";
+import { badRequest, ErrorResponse, HttpResult, internalError, ok } from "../../apiResponse";
 import { validateAddress, validateCallPolicyPermissions, validateKeyType } from "../dataValidation";
 import { checkPrefundSafe, generateInstallationId } from "../helpers";
-import { CallPolicyPermission, DelegateInstallationPrepareData, NormalizedTokenLimit, PermissionPolicyType, PrepareDataForSigning, PrepareDelegateKeyInput } from "../types";
-import { extractCallPolicyPayload, logCallPolicySummary } from "./helper";
+import { CallPolicyPermission, DelegateInstallationPrepareData, InstallPrepareInput, InstallPrepareSuccess, NormalizedTokenLimit, PermissionPolicyType, PrepareDataForSigning, SignedDataForDelegateInstallation } from "../types";
+import { debugLog, extractCallPolicyPayload, logCallPolicySummary } from "./helper";
 import { wsService } from "../../..";
 import { InstallationStatus } from "../../../services/websocket";
 import { buildGrantAccessUoUnsigned, buildInstallCallPolicyUoUnsigned, buildInstallPermissionUoUnsigned, buildSetRecipientAllowedUoUnsigned, buildSetTokenLimitUoUnsigned, getRootCurrentNonce } from "../userOps";
@@ -11,18 +11,19 @@ import { EXECUTE_SELECTOR } from "../constants";
 import { getAllowedRecipients, getAllowedTokens } from "../callPolicy";
 
 
-
 export async function handlePrepareDelegatedKeyCreation(
-  input: PrepareDelegateKeyInput
-): Promise<HttpResult> {
+  input: InstallPrepareInput
+): Promise<HttpResult<InstallPrepareSuccess | ErrorResponse>>  {
   try {
-    const { delegatedEOA, keyType, clientId, permissions, callPolicyConfig, kernelAddress } = input;
+    const { delegatedAddress, keyType, clientId, permissions, callPolicyConfig, kernelAddress } = input;
+
+    debugLog("[/delegated/create] Received prepare request:", input);
 
     // --- VALIDATION BLOCK ---
     const kernelError = validateAddress(kernelAddress);
     if (kernelError) return badRequest(kernelError);
 
-    const delegatedEOAError = validateAddress(delegatedEOA);
+    const delegatedEOAError = validateAddress(delegatedAddress);
     if (delegatedEOAError) return badRequest(delegatedEOAError);
 
     const keyTypeError = validateKeyType(keyType);
@@ -45,7 +46,7 @@ export async function handlePrepareDelegatedKeyCreation(
     // --- NORMALIZATION ---
     let normalized = null;
     if (keyType === PermissionPolicyType.CALL_POLICY) {
-      normalized = extractCallPolicyPayload(permissions, callPolicyConfig, delegatedEOA);
+      normalized = extractCallPolicyPayload(permissions, callPolicyConfig, delegatedAddress);
 
       if (!normalized.callPolicyPermissions.length) {
         return badRequest("At least one permission is required for callpolicy");
@@ -55,7 +56,7 @@ export async function handlePrepareDelegatedKeyCreation(
     // --- MAIN LOGIC ---
     const result = await prepareDelegatedKeyInstallationData(
       installationId,
-      delegatedEOA,
+      delegatedAddress,
       keyType,
       clientId,
       kernelAddress as Address,
@@ -63,6 +64,8 @@ export async function handlePrepareDelegatedKeyCreation(
       normalized?.tokenLimits ?? [],
       normalized?.recipients ?? []
     );
+
+    debugLog("[/delegated/create] Installation preparation result:", result);
 
     if (result.isSuccess) {
       return ok({
@@ -119,11 +122,13 @@ async function prepareDelegatedKeyInstallationData(
     let permissionId: string;
     let vId: string;
 
-    let permissionPolicyData: PrepareDataForSigning;
-    let grantAccessData: PrepareDataForSigning;
-    let recipientListData: PrepareDataForSigning | undefined = undefined;
-    let tokenListData: PrepareDataForSigning | undefined = undefined;
+    let unsignedPermissionPolicyData: PrepareDataForSigning;
+    let unsignedGrantAccessData: PrepareDataForSigning;
+    let unsignedRecipientListData: PrepareDataForSigning | undefined = undefined;
+    let unsignedTokenListData: PrepareDataForSigning | undefined = undefined;
     let permissionPolicyType: PermissionPolicyType;
+
+    let index = 0;
 
     if (keyType === PermissionPolicyType.SUDO) {
       permissionPolicyType = PermissionPolicyType.SUDO;
@@ -135,7 +140,7 @@ async function prepareDelegatedKeyInstallationData(
         delegatedEOA as `0x${string}`
       );
 
-      permissionPolicyData = { unpacked, packed, userOpHash };
+      unsignedPermissionPolicyData = { unpacked, packed, userOpHash };
 
       permissionId = permId;
       vId = vid;
@@ -151,31 +156,25 @@ async function prepareDelegatedKeyInstallationData(
         delegatedEOA as `0x${string}`,
         callPolicyPermissions
       );
-      permissionPolicyData = { unpacked, packed, userOpHash };
+      unsignedPermissionPolicyData = { unpacked, packed, userOpHash };
       
       permissionId = permId;
       vId = vid;
     } 
 
+    index++;
 
 
-    if (keyType === PermissionPolicyType.CALL_POLICY) {
-      grantAccessData = await buildGrantAccessUoUnsigned(
-        kernelAddress,
-        vId as `0x${string}`,
-        EXECUTE_SELECTOR,
-        true,
-        1
-      );
-    } else {
-      grantAccessData = await buildGrantAccessUoUnsigned(
-        kernelAddress,
-        vId as `0x${string}`,
-        EXECUTE_SELECTOR,
-        true,
-        1
-      );
-    }
+    // grant access to vId
+    unsignedGrantAccessData = await buildGrantAccessUoUnsigned(
+      kernelAddress,
+      vId as `0x${string}`,
+      EXECUTE_SELECTOR,
+      true,
+      index
+    );
+  
+    index++;
 
 
     if (keyType === PermissionPolicyType.CALL_POLICY && (tokenLimits.length > 0 || recipients.length > 0)) {
@@ -184,13 +183,15 @@ async function prepareDelegatedKeyInstallationData(
         const recipientList = recipients;
         const allowedList = recipients.map(() => true);
 
-        recipientListData = await buildSetRecipientAllowedUoUnsigned(
+        unsignedRecipientListData = await buildSetRecipientAllowedUoUnsigned(
           permissionId as `0x${string}`,
           kernelAddress,
           recipientList,
           allowedList,
-          2
+          index
         );
+
+        index++;
       }
 
 
@@ -201,69 +202,71 @@ async function prepareDelegatedKeyInstallationData(
         const txLimits = tokenLimits.map(t => t.txLimit);
         const dailyLimits = tokenLimits.map(t => t.dailyLimit);
 
-        tokenListData = await buildSetTokenLimitUoUnsigned(
+        unsignedTokenListData = await buildSetTokenLimitUoUnsigned(
           permissionId as `0x${string}`,
           kernelAddress,
           tokens,
           enabled,
           txLimits,
           dailyLimits,
-          3
+          index
         );
+
+        index++;
       }
 
       // Best-effort verification and remediation to ensure limits/recipients are actually stored on-chain
-      try {
-        const currentTokens = await getAllowedTokens(kernelAddress, permissionId as `0x${string}`);
-        const currentRecipients = await getAllowedRecipients(kernelAddress, permissionId as `0x${string}`);
+      // try {
+      //   const currentTokens = await getAllowedTokens(kernelAddress, permissionId as `0x${string}`);
+      //   const currentRecipients = await getAllowedRecipients(kernelAddress, permissionId as `0x${string}`);
 
-        const missingTokens = tokenLimits.filter(
-          (tl) => !currentTokens.some((ct) => ct.token.toLowerCase() === tl.token.toLowerCase())
-        );
-        const missingRecipients = recipients.filter(
-          (r) => !currentRecipients.some((cr) => cr.toLowerCase() === r.toLowerCase())
-        );
+      //   const missingTokens = tokenLimits.filter(
+      //     (tl) => !currentTokens.some((ct) => ct.token.toLowerCase() === tl.token.toLowerCase())
+      //   );
+      //   const missingRecipients = recipients.filter(
+      //     (r) => !currentRecipients.some((cr) => cr.toLowerCase() === r.toLowerCase())
+      //   );
 
-        if (missingRecipients.length > 0) {
-          console.log("[CallPolicy] Re-applying missing recipients:", missingRecipients);
-          const allowedList = missingRecipients.map(() => true);
-          const { unpacked } = await buildSetRecipientAllowedUoUnsigned(
-            permissionId as `0x${string}`,
-            kernelAddress,
-            missingRecipients,
-            allowedList
-          );
-        }
+      //   if (missingRecipients.length > 0) {
+      //     console.log("[CallPolicy] Re-applying missing recipients:", missingRecipients);
+      //     const allowedList = missingRecipients.map(() => true);
+      //     const { unpacked } = await buildSetRecipientAllowedUoUnsigned(
+      //       permissionId as `0x${string}`,
+      //       kernelAddress,
+      //       missingRecipients,
+      //       allowedList
+      //     );
+      //   }
 
-        if (missingTokens.length > 0) {
-          console.log("[CallPolicy] Re-applying missing token limits:", missingTokens);
-          const tokens = missingTokens.map((t) => t.token);
-          const enabled = missingTokens.map((t) => t.enabled);
-          const txLimits = missingTokens.map((t) => t.txLimit);
-          const dailyLimits = missingTokens.map((t) => t.dailyLimit);
+      //   if (missingTokens.length > 0) {
+      //     console.log("[CallPolicy] Re-applying missing token limits:", missingTokens);
+      //     const tokens = missingTokens.map((t) => t.token);
+      //     const enabled = missingTokens.map((t) => t.enabled);
+      //     const txLimits = missingTokens.map((t) => t.txLimit);
+      //     const dailyLimits = missingTokens.map((t) => t.dailyLimit);
 
-          const { unpacked } = await buildSetTokenLimitUoUnsigned(
-            permissionId as `0x${string}`,
-            kernelAddress,
-            tokens,
-            enabled,
-            txLimits,
-            dailyLimits
-          );
-        }
+      //     const { unpacked } = await buildSetTokenLimitUoUnsigned(
+      //       permissionId as `0x${string}`,
+      //       kernelAddress,
+      //       tokens,
+      //       enabled,
+      //       txLimits,
+      //       dailyLimits
+      //     );
+      //   }
 
-        const finalTokens = await getAllowedTokens(kernelAddress, permissionId as `0x${string}`);
-        const finalRecipients = await getAllowedRecipients(kernelAddress, permissionId as `0x${string}`);
-        if (recipients.length > 0 && finalRecipients.length === 0) {
-          throw new Error("CallPolicy recipients not persisted on-chain");
-        }
-        if (tokenLimits.length > 0 && finalTokens.length === 0) {
-          throw new Error("CallPolicy token limits not persisted on-chain");
-        }
-      } catch (verifyErr) {
-        console.warn("[CallPolicy] Verification of limits/recipients failed:", verifyErr);
-        throw verifyErr;
-      }
+      //   const finalTokens = await getAllowedTokens(kernelAddress, permissionId as `0x${string}`);
+      //   const finalRecipients = await getAllowedRecipients(kernelAddress, permissionId as `0x${string}`);
+      //   if (recipients.length > 0 && finalRecipients.length === 0) {
+      //     throw new Error("CallPolicy recipients not persisted on-chain");
+      //   }
+      //   if (tokenLimits.length > 0 && finalTokens.length === 0) {
+      //     throw new Error("CallPolicy token limits not persisted on-chain");
+      //   }
+      // } catch (verifyErr) {
+      //   console.warn("[CallPolicy] Verification of limits/recipients failed:", verifyErr);
+      //   throw verifyErr;
+      // }
     }
 
 
@@ -275,10 +278,10 @@ async function prepareDelegatedKeyInstallationData(
       isSuccess: true,
       data: {
         permissionPolicyType,
-        permissionPolicyData,
-        grantAccessData,
-        recipientListData,
-        tokenListData
+        unsignedPermissionPolicyData,
+        unsignedGrantAccessData,
+        unsignedRecipientListData,
+        unsignedTokenListData
       },
     };
 
@@ -311,5 +314,4 @@ async function prepareDelegatedKeyInstallationData(
     };
   }
 }
-
 

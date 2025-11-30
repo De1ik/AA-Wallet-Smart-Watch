@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { savePrivateKey, loadPrivateKey, deletePrivateKey, saveSeedPhrase, loadSeedPhrase, deleteSeedPhrase } from '@/utils/secureStorage';
 import { generateSeedPhrase, validateSeedPhrase, generateWalletAddress, generatePrivateKey, generateWalletAccount, getPrivateKeyFromAccount, mockCryptoData } from '@/utils/crypto';
 // import { predictSmartWalletAddress } from '@/utils/walletService';
-import { apiClient } from '@/utils/apiClient';
+import { apiClient } from '@/utils/api-client/apiClient';
 import { clearAllDelegatedKeys } from '@/utils/delegatedKeys';
 import { getWalletAddress } from '@/utils/walletService';
 

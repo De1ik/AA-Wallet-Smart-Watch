@@ -3,14 +3,22 @@ import { handlePrepareDelegatedKeyCreation } from "../utils/native/delegateKey/i
 import { handleExecuteDelegatedKeyCreation } from "../utils/native/delegateKey/installExecute";
 import { handlePrepareDelegatedKeyRevoke } from "../utils/native/delegateKey/revokePrepare";
 import { handleExecuteDelegatedKeyRevoke } from "../utils/native/delegateKey/revokeExecute";
-
-
-
+import type {
+  InstallExecuteInput,
+  InstallExecuteSuccess,
+  InstallPrepareInput,
+  InstallPrepareSuccess,
+  RevokeExecuteInput,
+  RevokeExecuteSuccess,
+  RevokePrepareInput,
+  RevokePrepareSuccess,
+} from "../utils/native/types";
+import type { ErrorResponse } from "../utils/apiResponse";
 
 
 export function registerDelegatedRoutes(router: Router): void {
   // Route to create a delegated key with specified permissions (include full flow)
-  router.post("/delegated/install/prepare-data", async (req: Request, res: Response) => {
+  router.post("/delegated/install/prepare-data", async (req: Request<any, any, InstallPrepareInput>, res: Response<InstallPrepareSuccess | ErrorResponse>) => {
     const result = await handlePrepareDelegatedKeyCreation(req.body);
 
     if (result.status === 200) {
@@ -21,7 +29,7 @@ export function registerDelegatedRoutes(router: Router): void {
   });
 
   // Route to create a delegated key with specified permissions (include full flow)
-  router.post("/delegated/install/execute", async (req: Request, res: Response) => {
+  router.post("/delegated/install/execute", async (req: Request<any, any, InstallExecuteInput>, res: Response<InstallExecuteSuccess | ErrorResponse>) => {
     const result = await handleExecuteDelegatedKeyCreation(req.body);
 
     if (result.status === 200) {
@@ -32,14 +40,14 @@ export function registerDelegatedRoutes(router: Router): void {
   });
 
   // Route to revoke a delegated key's access
-  router.post("delegated/revoke/prepare-data", async (req: Request, res: Response) => {
+  router.post("delegated/revoke/prepare-data", async (req: Request<any, any, RevokePrepareInput>, res: Response<RevokePrepareSuccess | ErrorResponse>) => {
     const result = await handlePrepareDelegatedKeyRevoke(req.body);
 
     return res.status(result.status).json(result.body);
   });
 
   // Route to revoke a delegated key's access
-  router.post("delegated/revoke/execute", async (req: Request, res: Response) => {
+  router.post("delegated/revoke/execute", async (req: Request<any, any, RevokeExecuteInput>, res: Response<RevokeExecuteSuccess>) => {
     const result = await handleExecuteDelegatedKeyRevoke(req.body);
 
     return res.status(result.status).json(result.body);

@@ -3,17 +3,20 @@ import { UnpackedUserOperationV07, PackedUserOperation } from "./types"
 import { Address, privateKeyToAccount } from "viem/accounts";
 import { Hex } from "viem";
 import { publicClient, ENTRY_POINT_V7, entryPointAbi } from "./config";
+import { debugLog } from "@/utils/api-client/helpers";
 
 
 // validate and sign income user op
-export async function validateAndSign(packed: PackedUserOperation, unpacked: UnpackedUserOperationV07, userOpHash: Hex) {
-    if (!(await validateUserOperation(packed, userOpHash))) return {}
+export async function validateAndSign(packed: PackedUserOperation, unpacked: UnpackedUserOperationV07, userOpHash: Hex): Promise<{unpacked: UnpackedUserOperationV07; signature: string} | undefined> {
+    if (!(await validateUserOperation(packed, userOpHash))) return undefined
     return await signUserOperation(packed, unpacked, userOpHash);
 }
 
 // compare recalculated UserOpHash and provided
 export async function validateUserOperation(packed: PackedUserOperation, userOpHash: Hex) {
     const userOpHashCalculated = await getUserOpStructHash(packed);
+    debugLog("Provided userOpHash: ", userOpHash);
+    debugLog("Calculated userOpHash: ", userOpHashCalculated);
     if (userOpHash !== userOpHashCalculated) return false;
     return true;
 }
@@ -21,6 +24,7 @@ export async function validateUserOperation(packed: PackedUserOperation, userOpH
 // sign User Op with the root private key
 export async function signUserOperation(packed: PackedUserOperation, unpacked: UnpackedUserOperationV07, userOpHash: Hex)  {
     const privateKey = await loadPrivateKey() as Address;
+    debugLog("Loaded private key for signing:", privateKey);
     if (!privateKey) throw new Error()
     const rootAccount = privateKeyToAccount(privateKey);
 
@@ -42,3 +46,29 @@ export async function getUserOpStructHash(packed: PackedUserOperation) {
 
     return userOpHash;
 }
+
+
+// helper for processing unsigned data for delegate installation
+export async function processUnsigned(block: any, name: string): Promise<{unpacked: UnpackedUserOperationV07; signature: string} | undefined>  {
+    if (!block) {
+        throw new Error(`${name} is missing`);
+    }
+
+    // Some responses wrap the payload under .data
+    const payload = block?.packed ? block : block?.data;
+    if (!payload?.packed || !payload?.unpacked || !payload?.userOpHash) {
+        throw new Error(`${name} is malformed`);
+    }
+
+    const normalizedPacked: PackedUserOperation = {
+        ...payload.packed,
+        // Convert numeric strings coming from JSON back to bigint
+        nonce: typeof payload.packed.nonce === "string" ? BigInt(payload.packed.nonce) : payload.packed.nonce,
+        preVerificationGas:
+            typeof payload.packed.preVerificationGas === "string"
+                ? BigInt(payload.packed.preVerificationGas)
+                : payload.packed.preVerificationGas,
+    };
+
+    return await validateAndSign(normalizedPacked, payload.unpacked, payload.userOpHash);
+};

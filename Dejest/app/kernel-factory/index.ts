@@ -30,7 +30,7 @@ export async function createKernelWallet(privateKey: Address) {
     const kernelAccount = await toKernelSmartAccount({ 
         client, 
         owners: [pkAccount], 
-        version: '0.3.1', 
+        version: '0.3.3', 
     }) 
 
     console.log("Kernel Address: ", kernelAccount.address);

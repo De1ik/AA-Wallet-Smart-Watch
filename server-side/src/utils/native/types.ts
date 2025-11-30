@@ -22,6 +22,10 @@ export type UnpackedUserOperationV07 = {
   maxPriorityFeePerGas: Hex;
   maxFeePerGas: Hex;
   signature: Hex;
+  paymaster?: Hex;
+  paymasterVerificationGasLimit?: Hex;
+  paymasterPostOpGasLimit?: Hex;
+  paymasterData?: Hex;
 };
 
 export interface UserOperation {
@@ -81,10 +85,10 @@ export interface PrepareDataForSigning {
 
 export interface PrepareDelegateInstallation {
   permissionPolicyType: PermissionPolicyType;
-  permissionPolicyData: PrepareDataForSigning;
-  grantAccessData: PrepareDataForSigning;
-  recipientListData?: PrepareDataForSigning;
-  tokenListData?: PrepareDataForSigning;
+  unsignedPermissionPolicyData: PrepareDataForSigning;
+  unsignedGrantAccessData: PrepareDataForSigning;
+  unsignedRecipientListData?: PrepareDataForSigning;
+  unsignedTokenListData?: PrepareDataForSigning;
 }
 
 
@@ -144,15 +148,6 @@ export type NormalizedCallPolicyPayload = {
   recipients: Address[];
 };
 
-export interface PrepareDelegateKeyInput {
-  delegatedEOA: string;
-  keyType: PermissionPolicyType;
-  clientId?: string;
-  permissions?: any;
-  callPolicyConfig?: any;
-  kernelAddress: string;
-}
-
 export interface RevokePrepareInput {
   delegatedEOA: string;
   kernelAddress: string;
@@ -161,4 +156,52 @@ export interface RevokePrepareInput {
 export interface RevokeExecuteInput {
   data: SignedDataForDelegateInstallation;
   kernelAddress: string;
+}
+
+export interface InstallPrepareInput {
+  delegatedAddress: string;
+  keyType: PermissionPolicyType;
+  clientId?: string;
+  permissions?: any;
+  callPolicyConfig?: any;
+  kernelAddress: string;
+}
+
+export interface InstallPrepareSuccess {
+  success: boolean;
+  installationId: string;
+  data: {  
+    permissionPolicyType: PermissionPolicyType;
+    unsignedPermissionPolicyData: PrepareDataForSigning;
+    unsignedGrantAccessData: PrepareDataForSigning;
+    unsignedRecipientListData?: PrepareDataForSigning;
+    unsignedTokenListData?: PrepareDataForSigning;
+  };                     
+  message: string;
+}
+
+export interface InstallExecuteInput {
+  data: ExecuteDelegateInstallation;
+  clientId: string;
+  kernelAddress: Address;
+  installationId: string;
+}
+
+export interface InstallExecuteSuccess {
+  success: boolean;
+  installationId: string;
+  message: string;
+}
+
+export interface RevokePrepareSuccess {
+  success: boolean;
+  data?: PrepareDataForSigning;
+  message: string;
+  error?: string;
+}
+
+export interface RevokeExecuteSuccess {
+  success: boolean;
+  data?: string;
+  message: string;
 }

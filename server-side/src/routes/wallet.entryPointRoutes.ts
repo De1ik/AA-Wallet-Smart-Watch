@@ -1,22 +1,37 @@
 import type { Request, Response, Router } from "express";
-import { parseEther } from "viem";
+import { Address, parseEther } from "viem";
 
 import {
   buildDepositUserOpUnsigned,
   getCurrentGasPrices,
   getRootCurrentNonce,
+  PrepareDataForSigning,
   SendUserOpResult,
   sendUserOpV07,
+  SignedDataForDelegateInstallation,
 } from "../utils/native-code";
 import { ENTRY_POINT_ADDRESS } from "./wallet.constants";
 import { checkPrefundSimple } from "./wallet.prefund";
+import { badRequest, ErrorResponse, HttpResult, internalError, ok } from "../utils/apiResponse";
+import { debugLog, executeUserOp } from "../utils/native/delegateKey/helper";
 
 export function registerEntryPointRoutes(router: Router): void {
   // Route to get current gas prices
   router.get("/entrypoint/status", async (req: Request, res: Response) => {
-    const { kernelAddress } = req.body ?? {};
+    const kernelAddress = (req.body as any)?.kernelAddress ?? (req.query as any)?.kernelAddress;
+    if (!kernelAddress || typeof kernelAddress !== "string") {
+      return res.status(400).json({
+        hasPrefund: false,
+        message: "kernelAddress is required",
+        depositWei: "0",
+        requiredPrefundWei: "0",
+        shortfallWei: "0",
+        kernelAddress: kernelAddress ?? "",
+        entryPointAddress: ENTRY_POINT_ADDRESS,
+      });
+    }
     try {
-      const result = await checkPrefundSimple(kernelAddress);
+      const result = await checkPrefundSimple(kernelAddress as Address);
       return res.json(result);
     } catch (err: any) {
       console.error("[/entrypoint/status] error:", err);
@@ -33,65 +48,112 @@ export function registerEntryPointRoutes(router: Router): void {
     }
   });
 
-  // Route to deposit ETH into the EntryPoint contract
-  router.post("/entrypoint/deposit", async (req: Request, res: Response) => {
-    const { amountEth, kernelAddress } = req.body ?? {};
-    try {
-      console.log("[entrypoint/deposit] -> Request received:", req.body);
+  router.post("/entrypoint/deposit/prepare-data", async (req: Request<any, any, EntryPointDepositPrepareInput>, res: Response<prepareEntryPointDeposit | ErrorResponse>) => {
+    const result = await handlePrepareEntrypointDeposit(req.body);
+    return res.status(result.status).json(result.body);
+  });
+
+  router.post("/entrypoint/deposit/execute", async (req: Request<any, any, SignedDataForDelegateInstallation>, res: Response<executedEntryPointDeposit | ErrorResponse>) => {
+    const result = await handleExecuteEntrypointDeposit(req.body);
+    return res.status(result.status).json(result.body);
+  });
+}
+
+
+export interface EntryPointDepositPrepareInput {
+  amountEth: string;
+  kernelAddress: Address;
+}
+
+
+export interface prepareEntryPointDeposit {
+  success: boolean;
+  data: PrepareDataForSigning;
+  message: string;
+}
+
+export interface executedEntryPointDeposit {
+  success: boolean;
+  data: { txHash: string; gasUsed: string };
+  message: string;
+}
+
+export async function handlePrepareEntrypointDeposit(
+  input: EntryPointDepositPrepareInput
+): Promise<HttpResult<prepareEntryPointDeposit | ErrorResponse>>  {
+
+  debugLog("Preparing deposit for entry point:", input);
+
+  const { amountEth, kernelAddress } = input;
+
+  try {
+
       const amountStr = amountEth?.toString() ?? "0.01";
       const parsedAmount = Number(amountStr);
 
       if (isNaN(parsedAmount) || parsedAmount <= 0) {
-        console.log("[entrypoint/deposit] -> Invalid amount:", amountStr);
-        return res.status(400).json({
-          error: "Invalid amount",
-          message: "Deposit amount must be a positive number",
-        });
+        return badRequest(
+          "Invalid amount",
+          "Deposit amount must be a positive number"
+        );
       }
 
-      const amountWei = parseEther(amountStr);
-      console.log("[entrypoint/deposit] -> Parsed amount:", amountStr, "ETH =", amountWei.toString(), "wei");
-      console.log("[entrypoint/deposit] -> Building deposit UserOp for", amountStr, "ETH");
+      debugLog("AMOUNT to DEPOSIT (ETH):", amountStr);
 
-      let depositUserOp;
+      const amountWei = parseEther(amountStr);
+
       let packed, unpacked, userOpHash;
       try {
         // Build the deposit User Operation
         const result = await buildDepositUserOpUnsigned(amountWei, kernelAddress);
         ({ packed, unpacked, userOpHash } = result);
-        console.log("[entrypoint/deposit] -> Deposit UserOp built successfully");
       } catch (buildError: any) {
-        console.error("[entrypoint/deposit] -> Error building UserOp:", buildError);
-        return res.status(500).json({
-          success: false,
-          error: "Failed to build deposit UserOp",
-          message: buildError?.message ?? "UserOp build error",
-          details: buildError?.stack,
-          kernelAddress: kernelAddress,
-          entryPointAddress: ENTRY_POINT_ADDRESS,
-        });
+        return internalError(buildError?.message ?? "UserOp build error", "Failed to build deposit UserOp");
       }
 
-      console.log("[entrypoint/deposit] -> Sending UserOp to bundler...");
+      debugLog("built for signing", { packed, unpacked, userOpHash });
 
-      return res.json({
+      return ok({
         success: true,
-        data: {
-          packed, unpacked, userOpHash
-        },
-        message: "deposit to entry point",
+        data: { packed, unpacked, userOpHash },
+        message: "Deposit to entry point was successful",
       });
-    } catch (err: any) {
-      console.error("[/entrypoint/deposit] error:", err);
-      console.error("[/entrypoint/deposit] error stack:", err?.stack);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to deposit to EntryPoint",
-        message: err?.message ?? "internal error",
-        details: err?.stack,
-        kernelAddress: kernelAddress,
-        entryPointAddress: ENTRY_POINT_ADDRESS,
+  } catch (err: any) {
+      return internalError(err?.message ?? "Failed to deposit to EntryPoint", "Failed to deposit to EntryPoint");
+  }
+}
+
+
+export async function handleExecuteEntrypointDeposit(
+  input: SignedDataForDelegateInstallation
+): Promise<HttpResult<executedEntryPointDeposit | ErrorResponse>>  {
+  debugLog("input execute deposit", input);
+  try {
+    const { unpacked, signature } = input;
+
+    // Ensure the signature we received is on the userOp we are about to send
+    // if (signature) {
+    //   unpacked.signature = signature;
+    // }
+
+    const sendResult = await sendUserOpV07(unpacked);
+    debugLog("response execute deposit", sendResult);
+
+    if (sendResult.success) {
+      return ok({
+        success: true,
+        data: { txHash: sendResult.txHash, gasUsed: sendResult.gasUsed },
+        message: "Deposit to entry point was successful",
       });
     }
-  });
+
+    return ok({
+      success: false,
+      message: sendResult.revertReason ?? "Failed to deposit to entry point",
+    });
+  } catch (err: any) {
+    debugLog("response execute deposit", err);
+      return internalError(err?.message ?? "Failed to execute deposit to EntryPoint", "Failed to execute deposit to EntryPoint");
+  }
+
 }

@@ -1,8 +1,5 @@
 import { Address } from "viem";
-import { CallPolicyPermission, ExecuteDelegateInstallation, NormalizedTokenLimit, PermissionPolicyType, RevokeExecuteInput, SignedDataForDelegateInstallation, UnpackedUserOperationV07 } from "../types";
-import { InstallationStatus } from "../../../services/websocket";
-import { wsService } from "../../..";
-import { getRootCurrentNonce, sendUserOpV07 } from "../userOps";
+import { RevokeExecuteInput, RevokeExecuteSuccess } from "../types";
 import { HttpResult, ok } from "../../apiResponse";
 import { executeUserOp } from "./helper";
 import { validateAddress } from "../dataValidation";
@@ -10,7 +7,7 @@ import { validateAddress } from "../dataValidation";
 
 export async function handleExecuteDelegatedKeyRevoke(
   input: RevokeExecuteInput,
-): Promise<HttpResult> {
+): Promise<HttpResult<RevokeExecuteSuccess>> {
     try {
         const { data, kernelAddress } = input;
 

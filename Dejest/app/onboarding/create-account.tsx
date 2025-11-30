@@ -11,6 +11,7 @@ export default function CreateAccountScreen() {
   const [isCreating, setIsCreating] = useState(false);
 
   const handleCreateWallet = async () => {
+    
     try {
       setIsCreating(true);
       const wallet = await createWallet();

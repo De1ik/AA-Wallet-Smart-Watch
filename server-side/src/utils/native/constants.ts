@@ -8,6 +8,8 @@ export const ENTRY_POINT_V7: `0x${string}` = "0x0000000071727De22E5E9d8BAf0edAc6
 
 export const ENTRY_POINT: Address = (process.env.ENTRY_POINT ?? ENTRY_POINT_V7) as Address;
 
+export const ZERO_DEV_RPC = 'https://rpc.zerodev.app/api/v3/230f95ae-5463-4783-a0f0-d907619f9bee/chain/11155111';
+
 export const BUNDLER_RPC_URL = "https://api.pimlico.io/v2/11155111/rpc?apikey=pim_TSXZcxdAYixqPvzchXp64f";
 export const ETH_RPC_URL = "https://sepolia.infura.io/v3/7df085afafad4becaad36c48fb162932";
 

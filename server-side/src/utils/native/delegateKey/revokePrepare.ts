@@ -1,11 +1,11 @@
 import { Address } from "viem";
-import { badRequest, HttpResult, internalError, ok, rateLimit } from "../../apiResponse";
+import { badRequest, ErrorResponse, HttpResult, ok } from "../../apiResponse";
 import { validateAddress } from "../dataValidation";
 import { checkPrefundSafe } from "../helpers";
-import { RevokePrepareInput } from "../types";
+import { RevokePrepareInput, RevokePrepareSuccess } from "../types";
 import { buildUninstallPermissionUoUnsigned } from "../userOps";
 
-export async function handlePrepareDelegatedKeyRevoke(input: RevokePrepareInput): Promise<HttpResult> {
+export async function handlePrepareDelegatedKeyRevoke(input: RevokePrepareInput): Promise<HttpResult<RevokePrepareSuccess | ErrorResponse>> {
   try {
     const { delegatedEOA, kernelAddress } = input;
 

@@ -9,8 +9,7 @@ import { loadPrivateKey } from '@/utils/secureStorage';
 import { Hex } from 'viem';
 
 import { createKernelWallet } from '../kernel-factory';
-import { privateKeyToAccount } from 'viem/accounts';
-import { truncate } from 'fs';
+
 
 export default function CreateKernelScreen() {
   const { linkKernelWallet, refreshCryptoData } = useWallet();
