@@ -14,7 +14,7 @@ import {
   CALL_POLICY,
   ENTRY_POINT,
   HOOK_SENTINEL
-} from "./constants";
+} from "../../shared/constants/constants";
 
 import { PackedUserOperation as u1 } from "viem/_types/account-abstraction";
 
@@ -33,12 +33,12 @@ import {
   vIdFromPermissionId,
   EXEC_MODE_SIMPLE_SINGLE,
 } from "./helpers";
-import { bundlerClient, publicClient } from "./clients";
+import { bundlerClient, publicClient } from "../../shared/clients/sepoliaClient";
 import { callPolicyAbi, entryPointAbi, kernelAbi, kernelAbiGrant, kernelInstallValidationsAbi, stakeAbi } from "./abi";
 import { getCurrentGasPrices, getOptimizedGasLimits } from "./gas";
 import { CallPolicyPermission, PackedUserOperation, UnpackedUserOperationV07 } from "./types";
 import { applyZeroDevPaymaster } from "../paymaster";
-import { debugLog } from "./delegateKey/helper";
+import { debugLog } from "../../shared/helpers/helper";
 
 export interface SendUserOpResult {
   txHash: Hex;

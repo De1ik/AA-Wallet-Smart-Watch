@@ -1,6 +1,6 @@
 // import { PackedUserOperation } from "viem/_types/account-abstraction";
-import { ENTRY_POINT, ENTRY_POINT_V7, ZERO_DEV_RPC } from "./native/constants";
-import { debugLog } from "./native/delegateKey/helper";
+import { ENTRY_POINT, ZERO_DEV_RPC } from "../shared/constants/constants";
+import { debugLog } from "../shared/helpers/helper";
 
 import { createPaymasterClient } from 'viem/account-abstraction'
 import { http } from "viem";
@@ -34,7 +34,7 @@ export async function applyZeroDevPaymaster(unpacked: UnpackedUserOperationV07) 
     const paymasterData = await paymasterClient.getPaymasterData({
         ...uoForPaymaster,
         chainId: sepolia.id,
-        entryPointAddress: ENTRY_POINT_V7,
+        entryPointAddress: ENTRY_POINT,
     });
 
 

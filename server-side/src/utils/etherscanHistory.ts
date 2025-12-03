@@ -4,6 +4,8 @@
  * Fetches external and internal transactions from Etherscan API
  */
 
+import { TokenType, TxType } from "../modules/account/types";
+
 type NetworkConfig = {
   baseUrl: string;
   chainId: string;
@@ -20,7 +22,7 @@ export type EtherscanTransaction = {
   from: string;
   to: string;
   value: number;
-  type: 'sent' | 'received';
+  type: TxType;
   isInternal: boolean;
   timestamp: string;
   success: boolean;
@@ -31,7 +33,7 @@ export type EtherscanTransaction = {
   tokenAddress?: string;
   tokenDecimals?: number;
   tokenId?: string; // For NFTs
-  tokenType?: 'ETH' | 'ERC20' | 'ERC721' | 'ERC1155';
+  tokenType?: TokenType;
 };
 
 // Get Etherscan configuration for a given chain
@@ -258,13 +260,13 @@ export async function fetchEtherscanTransactions(
       value: valueEth,
       type:
         tx.from?.toLowerCase() === address.toLowerCase()
-          ? "sent" as const
-          : "received" as const,
+          ? TxType.SENT
+          : TxType.RECEIVED,
       isInternal: !!tx.traceId || tx.type === "internal",
       timestamp,
       success: isSuccess,
       errorMessage: !isSuccess && tx.isError !== "0" && tx.isError !== 0 ? "Transaction failed" : undefined,
-      tokenType: 'ETH' as const,
+      tokenType: TokenType.ETH,
     };
   });
 
@@ -284,8 +286,8 @@ export async function fetchEtherscanTransactions(
       to: tx.to || "unknown",
       value,
       type: tx.from?.toLowerCase() === address.toLowerCase()
-        ? "sent" as const
-        : "received" as const,
+        ? TxType.SENT
+        : TxType.RECEIVED,
       isInternal: false,
       timestamp,
       success: true,
@@ -293,7 +295,7 @@ export async function fetchEtherscanTransactions(
       tokenName: tx.tokenName || tx.tokenSymbol || 'Unknown Token',
       tokenAddress: tx.contractAddress || tx.tokenAddress,
       tokenDecimals: decimals,
-      tokenType: 'ERC20' as const,
+      tokenType: TokenType.ERC20,
     };
   });
 
@@ -310,8 +312,8 @@ export async function fetchEtherscanTransactions(
       to: tx.to || "unknown",
       value: 1,
       type: tx.from?.toLowerCase() === address.toLowerCase()
-        ? "sent" as const
-        : "received" as const,
+        ? TxType.SENT
+        : TxType.RECEIVED,
       isInternal: false,
       timestamp,
       success: true,
@@ -319,7 +321,7 @@ export async function fetchEtherscanTransactions(
       tokenName: tx.tokenName || tx.tokenSymbol || 'NFT',
       tokenAddress: tx.contractAddress || tx.tokenAddress,
       tokenId: tx.tokenID || tx.tokenId,
-      tokenType: 'ERC721' as const,
+      tokenType: TokenType.ERC721,
     };
   });
 
@@ -338,8 +340,8 @@ export async function fetchEtherscanTransactions(
       to: tx.to || "unknown",
       value,
       type: tx.from?.toLowerCase() === address.toLowerCase()
-        ? "sent" as const
-        : "received" as const,
+        ? TxType.SENT
+        : TxType.RECEIVED,
       isInternal: false,
       timestamp,
       success: true,
@@ -347,7 +349,7 @@ export async function fetchEtherscanTransactions(
       tokenName: tx.tokenName || tx.tokenSymbol || 'NFT',
       tokenAddress: tx.contractAddress || tx.tokenAddress,
       tokenId: tx.tokenID || tx.tokenId,
-      tokenType: 'ERC1155' as const,
+      tokenType: TokenType.ERC1155,
     };
   });
 
@@ -381,4 +383,3 @@ export async function fetchEtherscanTransactions(
   
   return limited;
 }
-

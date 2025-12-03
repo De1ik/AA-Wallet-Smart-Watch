@@ -1,6 +1,6 @@
 import { Address, parseUnits } from "viem";
 import { CallPolicyConfigInput, CallPolicyPermission, NormalizedTokenLimit, PermissionPolicyType, PermissionRule, TokenLimitInput } from "./types";
-import { KNOWN_TOKEN_DECIMALS } from "./constants";
+import { KNOWN_TOKEN_DECIMALS } from "../../shared/constants/constants";
 
 export function validateAddress(addr: string): string | null {
   if (!addr) return "Address is required";

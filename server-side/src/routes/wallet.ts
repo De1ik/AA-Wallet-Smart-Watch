@@ -1,15 +1,13 @@
 import { Router } from "express";
 
-import { registerAccountRoutes } from "./wallet.accountRoutes";
-import { registerCallPolicyRoutes } from "./wallet.callPolicyRoutes";
-import { registerDelegatedRoutes } from "./wallet.delegatedRoutes";
-import { registerEntryPointRoutes } from "./wallet.entryPointRoutes";
-import { registerHealthRoutes } from "./wallet.healthRoutes";
-import { registerUserOperationRoutes } from "./wallet.userOpRoutes";
+import { registerAccountRoutes } from "../modules/account/account.routes";
+import { registerCallPolicyRoutes } from "../modules/callpolicy/callpolicy.routes";
+import { registerDelegatedRoutes } from "../modules/delegated/delegated.routes";
+import { registerEntryPointRoutes } from "../modules/entrypoint/entrypoint.routes";
+import { registerUserOperationRoutes } from "../modules/userop/userop.routes";
 
 const router = Router();
 
-registerHealthRoutes(router);
 registerUserOperationRoutes(router);
 registerEntryPointRoutes(router);
 registerCallPolicyRoutes(router);
