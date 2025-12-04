@@ -1,4 +1,5 @@
 import { StyleSheet } from 'react-native';
+import { COLORS } from '@/shared/constants/colors';
 
 
 export const styles = StyleSheet.create({
@@ -57,18 +58,24 @@ export const styles = StyleSheet.create({
   connectionStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    gap: 14,
+    shadowColor: '#0F1A0F',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
   },
   connectionStatusConnected: {
     backgroundColor: '#0F1A0F',
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
   },
   connectionStatusDisconnected: {
-    backgroundColor: '#1A0F0F',
-    borderColor: '#EF4444',
+    backgroundColor: '#140707',
+    borderColor: '#F87171',
   },
   connectionStatusText: {
     flex: 1,
@@ -76,25 +83,42 @@ export const styles = StyleSheet.create({
     fontWeight: '500',
   },
   connectionStatusTextConnected: {
-    color: '#10B981',
+    color: COLORS.green,
   },
   connectionStatusTextDisconnected: {
-    color: '#EF4444',
+    color: '#FCA5A5',
   },
   connectionInfo: {
     flex: 1,
   },
   connectionSubtext: {
     fontSize: 12,
-    color: '#A0A0A0',
+    color: '#E2E8F0',
     marginTop: 2,
   },
   refreshButton: {
     padding: 8,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 8,
+    backgroundColor: '#140B25',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#8B5CF6',
+    borderColor: COLORS.purpleLight,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectionIconWrapper: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectionIconConnected: {
+    backgroundColor: COLORS.green,
+  },
+  connectionIconDisconnected: {
+    backgroundColor: COLORS.red,
   },
   errorContainer: {
     flexDirection: 'row',
@@ -104,17 +128,17 @@ export const styles = StyleSheet.create({
     padding: 12,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: '#EF4444',
+    borderColor: COLORS.red,
     gap: 8,
   },
   errorText: {
     flex: 1,
     fontSize: 14,
-    color: '#EF4444',
+    color: COLORS.red,
   },
   inputErrorText: {
     fontSize: 12,
-    color: '#EF4444',
+    color: COLORS.red,
     marginTop: 4,
   },
   warningContainer: {
@@ -179,8 +203,8 @@ export const styles = StyleSheet.create({
     position: 'relative',
   },
   keyTypeOptionSelected: {
-    borderColor: '#8B5CF6',
-    backgroundColor: '#1A0A2E',
+    borderColor: COLORS.purpleLight,
+    backgroundColor: COLORS.purpleDark,
   },
   keyTypeHeader: {
     flexDirection: 'row',
@@ -194,7 +218,7 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   keyTypeTitleSelected: {
-    color: '#8B5CF6',
+    color: COLORS.purpleLight,
   },
   keyTypeDescription: {
     fontSize: 14,
@@ -205,13 +229,13 @@ export const styles = StyleSheet.create({
     position: 'absolute',
     top: 12,
     right: 12,
-    backgroundColor: '#10B981',
+    backgroundColor: COLORS.green,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
   recommendedBadgeSelected: {
-    backgroundColor: '#10B981',
+    backgroundColor: COLORS.green,
   },
   recommendedText: {
     fontSize: 12,
@@ -225,13 +249,13 @@ export const styles = StyleSheet.create({
     position: 'absolute',
     top: 12,
     right: 12,
-    backgroundColor: '#EF4444',
+    backgroundColor: COLORS.red,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
   warningBadgeSelected: {
-    backgroundColor: '#EF4444',
+    backgroundColor: COLORS.red,
   },
   // Renamed to avoid duplicate key error
   warningBadgeText: {
@@ -259,7 +283,7 @@ export const styles = StyleSheet.create({
   requiredIndicator: {
     fontSize: 12,
     fontWeight: '500',
-    color: '#EF4444',
+    color: COLORS.red,
   },
   emptyStateText: {
     fontSize: 14,
@@ -281,7 +305,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
   },
   toggleOptionSelected: {
-    backgroundColor: '#8B5CF6',
+    backgroundColor: COLORS.purpleLight,
   },
   toggleText: {
     fontSize: 14,
@@ -309,7 +333,7 @@ export const styles = StyleSheet.create({
     borderColor: '#333333',
   },
   addButton: {
-    backgroundColor: '#8B5CF6',
+    backgroundColor: COLORS.purpleLight,
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
@@ -347,7 +371,7 @@ export const styles = StyleSheet.create({
     marginTop: 8,
   },
   selectTokenButtonText: {
-    color: '#10B981',
+    color: COLORS.green,
     fontSize: 14,
     fontWeight: '500',
   },
@@ -376,7 +400,7 @@ export const styles = StyleSheet.create({
     color: '#E5E7EB',
   },
   tokenNameSelected: {
-    color: '#10B981',
+    color: COLORS.green,
   },
   tokenAddress: {
     fontSize: 12,
@@ -412,20 +436,17 @@ export const styles = StyleSheet.create({
     flex: 1,
     gap: 6,
   },
-  limitLabel: {
-    color: '#9CA3AF',
-    fontSize: 12,
-  },
-  limitInput: {
-    backgroundColor: '#111827',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#1F2937',
-    padding: 10,
-    color: '#FFFFFF',
-  },
+  // limitInput: {
+  //   backgroundColor: '#111827',
+  //   borderRadius: 8,
+  //   borderWidth: 1,
+  //   borderColor: '#1F2937',
+  //   padding: 10,
+  //   color: '#FFFFFF',
+  // },
   tokenList: {
     flex: 1,
+    flexGrow: 1,
     paddingHorizontal: 20,
     paddingVertical: 12,
     marginTop: 4,
@@ -444,7 +465,7 @@ export const styles = StyleSheet.create({
     gap: 12,
   },
   tokenItemSelected: {
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
     backgroundColor: '#0F1A0F',
   },
   tokenBadge: {
@@ -475,7 +496,7 @@ export const styles = StyleSheet.create({
     borderColor: '#333333',
   },
   createButton: {
-    backgroundColor: '#8B5CF6',
+    backgroundColor: COLORS.purpleLight,
     borderRadius: 12,
     paddingVertical: 16,
     flexDirection: 'row',
@@ -555,7 +576,7 @@ export const styles = StyleSheet.create({
   },
   warningButtonPrimary: {
     flex: 1,
-    backgroundColor: '#EF4444',
+    backgroundColor: COLORS.red,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
@@ -627,7 +648,7 @@ export const styles = StyleSheet.create({
     backgroundColor: '#1A1A1A',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#8B5CF6',
+    borderColor: COLORS.purpleLight,
   },
   confirmationWarning: {
     fontSize: 14,
@@ -655,7 +676,7 @@ export const styles = StyleSheet.create({
   },
   confirmationButtonPrimary: {
     flex: 1,
-    backgroundColor: '#10B981',
+    backgroundColor: COLORS.green,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
@@ -682,7 +703,7 @@ export const styles = StyleSheet.create({
   progressTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#8B5CF6',
+    color: COLORS.purpleLight,
   },
   progressStep: {
     marginBottom: 12,
@@ -707,11 +728,11 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 8,
-    backgroundColor: '#1A0A2E',
+    backgroundColor: COLORS.purpleDark,
     borderRadius: 8,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#8B5CF6',
+    borderColor: COLORS.purpleLight,
   },
   progressNoteText: {
     flex: 1,
@@ -831,31 +852,31 @@ export const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: '#EF4444',
+    borderColor: COLORS.red,
     marginTop: 16,
   },
   cancelButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#EF4444',
+    color: COLORS.red,
   },
   
   // CallPolicy Styles
   advancedBadge: {
-    backgroundColor: '#1A0A2E',
+    backgroundColor: COLORS.purpleDark,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderWidth: 1,
-    borderColor: '#8B5CF6',
+    borderColor: COLORS.purpleLight,
   },
   advancedBadgeSelected: {
-    backgroundColor: '#8B5CF6',
+    backgroundColor: COLORS.purpleLight,
   },
   advancedText: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#8B5CF6',
+    color: COLORS.purpleLight,
   },
   advancedTextSelected: {
     color: '#FFFFFF',
@@ -899,13 +920,13 @@ export const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
     marginTop: 12,
   },
   addTargetText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#10B981',
+    color: COLORS.green,
   },
   
   // Actions Grid Styles
@@ -922,7 +943,7 @@ export const styles = StyleSheet.create({
   },
   actionItemSelected: {
     backgroundColor: '#0F1A0F',
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
   },
   actionHeader: {
     flexDirection: 'row',
@@ -936,7 +957,7 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   actionNameSelected: {
-    color: '#10B981',
+    color: COLORS.green,
   },
   actionBadge: {
     borderRadius: 4,
@@ -944,7 +965,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   transferBadge: {
-    backgroundColor: '#1A0A2E',
+    backgroundColor: COLORS.purpleDark,
   },
   approveBadge: {
     backgroundColor: '#1A2E0A',
@@ -991,7 +1012,7 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   limitInputError: {
-    borderColor: '#EF4444',
+    borderColor: COLORS.red,
   },
   
   // Summary Styles
@@ -1001,12 +1022,12 @@ export const styles = StyleSheet.create({
     padding: 12,
     marginTop: 16,
     borderWidth: 1,
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
   },
   summaryTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#10B981',
+    color: COLORS.green,
     marginBottom: 4,
   },
   summaryText: {
@@ -1050,12 +1071,12 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 8,
-    backgroundColor: '#1A0A2E',
+    backgroundColor: COLORS.purpleDark,
     borderRadius: 8,
     padding: 12,
     marginTop: 16,
     borderWidth: 1,
-    borderColor: '#8B5CF6',
+    borderColor: COLORS.purpleLight,
   },
   targetModalNoteText: {
     flex: 1,
@@ -1086,7 +1107,7 @@ export const styles = StyleSheet.create({
   },
   targetButtonPrimary: {
     flex: 1,
-    backgroundColor: '#10B981',
+    backgroundColor: COLORS.green,
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
@@ -1152,7 +1173,7 @@ export const styles = StyleSheet.create({
     borderColor: '#333333',
   },
   transferCardEnabled: {
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
     backgroundColor: '#0F1A0F',
   },
   transferCardHeader: {
@@ -1188,7 +1209,7 @@ export const styles = StyleSheet.create({
   },
   transferStatusText: {
     fontSize: 12,
-    color: '#10B981',
+    color: COLORS.green,
     fontWeight: '500',
   },
   transferCardControls: {
@@ -1205,7 +1226,7 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   transferToggleEnabled: {
-    backgroundColor: '#10B981',
+    backgroundColor: COLORS.green,
   },
   transferToggleThumb: {
     width: 20,
@@ -1225,7 +1246,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
   },
   selectedActionInfo: {
     flex: 1,
@@ -1257,7 +1278,7 @@ export const styles = StyleSheet.create({
   addActionText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#10B981',
+    color: COLORS.green,
     marginLeft: 8,
   },
   
@@ -1306,6 +1327,7 @@ export const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingBottom: 40,
+    marginBottom: 20
   },
   actionListItem: {
     flexDirection: 'row',
@@ -1320,7 +1342,7 @@ export const styles = StyleSheet.create({
   },
   actionListItemSelected: {
     backgroundColor: '#1A2E0A',
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
   },
   actionListItemContent: {
     flex: 1,
@@ -1337,7 +1359,7 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   actionListItemNameSelected: {
-    color: '#10B981',
+    color: COLORS.green,
   },
   actionListItemBadge: {
     borderRadius: 4,
@@ -1363,41 +1385,51 @@ export const styles = StyleSheet.create({
   // Token Selector Modal Styles
   tokenModal: {
     backgroundColor: '#1A1A1A',
-    borderRadius: 16,
-    margin: 20,
-    maxHeight: '75%',
+    borderRadius: 28,
+    marginHorizontal: 16,
+    marginVertical: 40,
+    maxHeight: '90%',
+    minHeight: '65%',
     alignSelf: 'center',
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: '#1E2230',
+    width: '96%',
   },
   tokenModalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 20,
+    paddingHorizontal: 28,
+    paddingTop: 28,
+    paddingBottom: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#333333',
+    borderBottomColor: '#1f2735',
   },
   tokenModalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#F8FAFC',
   },
   tokenModalFooter: {
-    padding: 20,
+    paddingHorizontal: 28,
+    paddingVertical: 24,
     borderTopWidth: 1,
-    borderTopColor: '#333333',
+    borderTopColor: '#1f2735',
   },
   tokenModalButton: {
-    backgroundColor: '#10B981',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: '#39b981',
+    borderRadius: 18,
+    paddingVertical: 16,
     alignItems: 'center',
+    shadowColor: COLORS.green,
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
   },
   tokenModalButtonText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontWeight: '700',
+    color: '#02120A',
   },
   
   // Transfer Options Modal Styles
@@ -1440,7 +1472,7 @@ export const styles = StyleSheet.create({
     borderColor: '#333333',
   },
   transferOptionSelected: {
-    borderColor: '#10B981',
+    borderColor: COLORS.green,
     backgroundColor: '#0F1A0F',
   },
   transferOptionContent: {
@@ -1458,7 +1490,7 @@ export const styles = StyleSheet.create({
     marginBottom: 4,
   },
   transferOptionTitleSelected: {
-    color: '#10B981',
+    color: COLORS.green,
   },
   transferOptionDescription: {
     fontSize: 12,
@@ -1474,8 +1506,8 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkboxSelected: {
-    backgroundColor: '#10B981',
-    borderColor: '#10B981',
+    backgroundColor: COLORS.green,
+    borderColor: COLORS.green,
   },
   transferModalFooter: {
     flexDirection: 'row',
@@ -1498,7 +1530,7 @@ export const styles = StyleSheet.create({
   },
   transferConfirmButton: {
     flex: 1,
-    backgroundColor: '#10B981',
+    backgroundColor: COLORS.green,
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
@@ -1513,5 +1545,143 @@ export const styles = StyleSheet.create({
   },
   transferConfirmButtonTextDisabled: {
     color: '#666666',
+  },
+  overlayCenter: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    paddingHorizontal: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reviewModal: {
+    width: '100%',
+    borderRadius: 18,
+    backgroundColor: '#0F0F0F',
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#262626',
+  },
+  reviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 8,
+  },
+  reviewTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  reviewSubtitle: {
+    color: '#A0A0A0',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  reviewSection: {
+    marginBottom: 16,
+  },
+  reviewLabel: {
+    color: COLORS.purpleLight,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  reviewValue: {
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  reviewValueMonospace: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontFamily: 'Menlo',
+    marginTop: 2,
+  },
+  reviewOperationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderColor: '#1F1F1F',
+    gap: 12,
+  },
+  reviewOperationInfo: {
+    flex: 1,
+  },
+  reviewOperationLabel: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  reviewOperationEstimate: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  reviewTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  reviewTotalLabel: {
+    color: '#A0A0A0',
+    fontSize: 13,
+  },
+  reviewTotalValue: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  reviewWarning: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+    backgroundColor: '#1A0A0F',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#F97316',
+    marginBottom: 16,
+  },
+  reviewWarningText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    lineHeight: 18,
+    flex: 1,
+  },
+  reviewActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  reviewCancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333333',
+    alignItems: 'center',
+  },
+  reviewCancelText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  reviewConfirmButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: COLORS.purpleLight,
+    alignItems: 'center',
+  },
+  reviewConfirmButtonDisabled: {
+    opacity: 0.7,
+  },
+  reviewConfirmText: {
+    color: '#0B0B0B',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

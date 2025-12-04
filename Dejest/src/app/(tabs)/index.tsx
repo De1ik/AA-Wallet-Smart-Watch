@@ -1,1 +1,3 @@
-export { default } from '@/modules/account/screens/dashboard-screen';
+import DashboardScreen from '@/modules/account/screens/dashboard-screen';
+
+export default DashboardScreen;

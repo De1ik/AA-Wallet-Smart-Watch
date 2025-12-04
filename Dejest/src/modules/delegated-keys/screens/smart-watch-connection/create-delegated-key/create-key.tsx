@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, Modal } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, TextInput, ActivityIndicator } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack } from 'expo-router';
@@ -11,7 +11,7 @@ import { useSmartWatch } from '@/shared/hooks/useSmartWatch';
 import { WatchKeyPair, WatchPermissionData, smartWatchBridge } from '@/services/native/smartWatchBridge';
 import { getKernelAddress } from '@/config/env';
 import { installationState } from '@/services/storage/installationState';
-import { ExecuteDelegateInstallation, InstallExecuteSuccess, InstallPrepareSuccess, PermissionPolicyType, PermissionTokenEntry, RequestCreateDelegateKey, SignedDataForDelegateInstallation } from '@/domain/types';
+import { InstallPrepareSuccess, PermissionPolicyType, PermissionTokenEntry, RequestCreateDelegateKey } from '@/domain/types';
 import { buildPermissionTokenEntries as buildPermissionTokenEntriesHelper, generateCallPolicyPermissions, logCallPolicyDebug, TransferOptions } from './callPolicyBuilders';
 import { PREDEFINED_ACTIONS, SUPPORTED_TOKENS } from '@/shared/constants/appConstants';
 import { styles } from './styles';
@@ -27,15 +27,29 @@ import { TokenSelectorModal } from './components/TokenSelectorModal';
 import { AddressConfirmationModal } from './components/AddressConfirmationModal';
 import { RestrictedSettings } from './components/RestrictedSettings';
 import { useWallet } from '@/modules/account/state/WalletContext';
-import { processUnsigned, validateAndSign } from '@/services/blockchain/signUOp';
-import { ErrorResponse, InstallExecuteInput, InstallPrepareInput } from '@/services/api/apiTypes';
+import { ErrorResponse, InstallPrepareInput } from '@/services/api/apiTypes';
 import { debugLog, isInstallPrepareSuccess } from '@/services/api/helpers';
 import { Address } from 'viem';
+import { useNotifications } from '@/shared/contexts/NotificationContext';
+import { transactionReviewState, InstallReviewPayload } from '@/services/storage/transactionReviewState';
+
+const BLOCKCHAIN_LOADER_FRAMES = ['.', '..', '...', ''];
+const BLOCKCHAIN_STATUS_MESSAGES = [
+  'Creating on Blockchain',
+  'Signing transactions bundle',
+  'Waiting for relayer ack',
+  'Finalizing user operation',
+];
+
+const snapshotCallPolicySettings = (settings: CallPolicySettings): CallPolicySettings =>
+  JSON.parse(JSON.stringify(settings)) as CallPolicySettings;
 
 export default function CreateDelegatedKeyScreen() {
   const [keyType, setKeyType] = useState<PermissionPolicyType>(PermissionPolicyType.CALL_POLICY);
   const [deviceName, setDeviceName] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
+  const [blockchainLoaderFrame, setBlockchainLoaderFrame] = useState(0);
+  const [blockchainStatusIndex, setBlockchainStatusIndex] = useState(0);
   const [showSudoWarning, setShowSudoWarning] = useState(false);
   const [showRestrictedSettings, setShowRestrictedSettings] = useState(false);
   const [generatedKeyPair, setGeneratedKeyPair] = useState<WatchKeyPair | null>(null);
@@ -43,6 +57,26 @@ export default function CreateDelegatedKeyScreen() {
   const [pendingKeyPair, setPendingKeyPair] = useState<WatchKeyPair | null>(null);
   const [isAborting, setIsAborting] = useState(false);
   const { wallet } = useWallet();
+  const { showError, showSuccess, showInfo } = useNotifications();
+
+  useEffect(() => {
+    if (isConnecting && generatedKeyPair) {
+      setBlockchainStatusIndex(0);
+      const frameInterval = setInterval(() => {
+        setBlockchainLoaderFrame((prev) => (prev + 1) % BLOCKCHAIN_LOADER_FRAMES.length);
+      }, 450);
+      const statusInterval = setInterval(() => {
+        setBlockchainStatusIndex((prev) => (prev + 1) % BLOCKCHAIN_STATUS_MESSAGES.length);
+      }, 1400);
+      return () => {
+        clearInterval(frameInterval);
+        clearInterval(statusInterval);
+      };
+    }
+
+    setBlockchainLoaderFrame(0);
+    setBlockchainStatusIndex(0);
+  }, [isConnecting, generatedKeyPair]);
 
   const generatePermissions = (delegatedKey: string) =>
     generateCallPolicyPermissions(
@@ -163,7 +197,7 @@ export default function CreateDelegatedKeyScreen() {
   // CallPolicy functions
   const addTargetAddress = () => {
     if (!newTargetName.trim()) {
-      Alert.alert('Error', 'Please enter a name for this address');
+      showError('Please enter a name for this address');
       return;
     }
     if (newTargetAddress && newTargetAddress.startsWith('0x') && newTargetAddress.length === 42) {
@@ -175,7 +209,7 @@ export default function CreateDelegatedKeyScreen() {
       setNewTargetAddress('');
       setShowAddTarget(false);
     } else {
-      Alert.alert('Error', 'Please enter a valid Ethereum address (0x...)');
+      showError('Please enter a valid Ethereum address (0x...)');
     }
   };
 
@@ -211,17 +245,20 @@ export default function CreateDelegatedKeyScreen() {
   const addAction = (actionId: string) => {
     if (actionId === 'transfer') {
       // Show transfer options modal
-      setShowTransferOptions(true);
-    } else {
-      if (!callPolicySettings.allowedActions.includes(actionId)) {
-        setCallPolicySettings(prev => ({
-          ...prev,
-          allowedActions: [...prev.allowedActions, actionId]
-        }));
-      }
       setShowActionSelector(false);
-      setActionSearchQuery('');
+      setShowTransferOptions(true);
+      return;
     }
+
+    if (!callPolicySettings.allowedActions.includes(actionId)) {
+      setCallPolicySettings(prev => ({
+        ...prev,
+        allowedActions: [...prev.allowedActions, actionId]
+      }));
+    }
+
+    // Keep the selector open so multiple actions can be added in one session
+    setActionSearchQuery('');
   };
 
   const handleTransferToggle = () => {
@@ -402,17 +439,7 @@ export default function CreateDelegatedKeyScreen() {
       console.log('Step 2: Creating delegated access on blockchain...');
       const delegatedEOA = keyPair.address as `0x${string}`;
 
-      // Navigate to installation progress screen (state is now managed globally)
-      router.push({
-        pathname: '/settings/smart-watch-connection/installation-progress-screen/installation-progress',
-        params: {
-          deviceId: deviceId,
-          deviceName: deviceName.trim(),
-          keyType: keyType,
-        }
-      });
-
-      // Start global installation state tracking
+      // Start global installation state tracking so progress screen can be shown later
       installationState.startInstallation(deviceId, deviceName.trim(), keyType);
 
       // Check prefund first (track errors instead of throwing)
@@ -489,61 +516,28 @@ export default function CreateDelegatedKeyScreen() {
         unsignedTokenListData,
       } = result.data;
 
-      debugLog(`PERMISSION POLICY DATA:`, unsignedPermissionPolicyData);
-      
-      // Always required blocks
-      const signedPermissionPolicyData = await processUnsigned(unsignedPermissionPolicyData, "unsignedPermissionPolicyData") as SignedDataForDelegateInstallation;
-      if (!signedPermissionPolicyData) {
-        console.log("Failed to sign permission policy data");
-        return;
-      }
-      const signedGrantAccessData = await processUnsigned(unsignedGrantAccessData, "unsignedGrantAccessData") as SignedDataForDelegateInstallation;
-      if (!signedGrantAccessData) {
-        console.log("Failed to sign grant access data");
-        return;
-      }
-
-      // Optional for CALL_POLICY
-      let signedRecipientListData: SignedDataForDelegateInstallation | undefined;
-      let signedTokenListData: SignedDataForDelegateInstallation | undefined;
-
-      // if call policy, process optional blocks
-      if (permissionPolicyType === PermissionPolicyType.CALL_POLICY) {
-        if (unsignedRecipientListData) {
-          signedRecipientListData = await processUnsigned(unsignedRecipientListData, "unsignedRecipientListData") as SignedDataForDelegateInstallation;
-        }
-        if (!signedRecipientListData) {
-          console.log("Failed to sign recipient list data");
-          return;
-        }
-        if (unsignedTokenListData) {
-          signedTokenListData = await processUnsigned(unsignedTokenListData, "unsignedTokenListData") as SignedDataForDelegateInstallation;
-        }
-        if (!signedTokenListData) {
-          console.log("Failed to sign token list data");
-          return;
-        }
-      }
-
-      const executeDelegateInstallation: ExecuteDelegateInstallation = {
-        permissionPolicyType,
-        signedPermissionPolicyData,
-        signedGrantAccessData,
-        signedRecipientListData,
-        signedTokenListData,
-      };
-
-      const installPrepareInput: InstallExecuteInput = { 
-        data: executeDelegateInstallation,
+      const reviewPayload: InstallReviewPayload = {
+        deviceId,
+        deviceName: deviceName.trim(),
+        delegatedAddress: delegatedEOA as Address,
+        kernelAddress: kernelAddress as Address,
         clientId: clientId!,
-        kernelAddress: kernelAddress! as Address,
-        installationId: result.installationId, 
-      }
-
-
-      const resultInstallation: InstallExecuteSuccess | ErrorResponse  = await apiClient.executeDelegatedKeyInstall(installPrepareInput);
-
-      debugLog(`[CreateKey] Installation result for device ${deviceId}:`, resultInstallation);
+        permissionPolicyType,
+        unsignedPermissionPolicyData,
+        unsignedGrantAccessData,
+        unsignedRecipientListData,
+        unsignedTokenListData,
+        installationId: result.installationId,
+        callPolicySettingsSnapshot: snapshotCallPolicySettings(callPolicySettings),
+      };
+      transactionReviewState.set({
+        kind: 'delegated-installation',
+        payload: reviewPayload,
+      });
+      setIsConnecting(false);
+      showInfo('Review the installation details before signing the transactions.', { title: 'Review required' });
+      router.push('/settings/smart-watch-connection/transaction-review');
+      return;
 
 
     } catch (error) {
@@ -596,20 +590,21 @@ export default function CreateDelegatedKeyScreen() {
       await syncPermissionData(watchPermissionData);
       console.log('Permission data synced to smart watch successfully!');
 
-      const keyTypeDisplay = keyType === PermissionPolicyType.SUDO ? 'Sudo Access' : keyType === PermissionPolicyType.CALL_POLICY ? 'Restricted Access' : 'CallPolicy Access';
-      Alert.alert(
-        'Success!',
-        `Delegated key created successfully for ${deviceName}.\n\nKey Type: ${keyTypeDisplay}\nPublic Key: ${keyPair.address.slice(0, 10)}...\n\nYour smart watch can now perform transactions on your behalf.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              wsClient.disconnect();
-              router.back();
-            }
-          }
-        ]
+      const keyTypeDisplay =
+        keyType === PermissionPolicyType.SUDO
+          ? 'Sudo Access'
+          : keyType === PermissionPolicyType.CALL_POLICY
+          ? 'Restricted Access'
+          : 'CallPolicy Access';
+      showSuccess(
+        `Delegated key created for ${deviceName} (${keyTypeDisplay}). Key: ${keyPair.address.slice(
+          0,
+          10
+        )}…\nYour smart watch can now perform transactions on your behalf.`,
+        { title: 'Success!' }
       );
+      wsClient.disconnect();
+      router.back();
     } catch (error) {
       console.error('Error in post-installation steps:', error);
       handleInstallationError(error instanceof Error ? error.message : 'Unknown error', deviceId);
@@ -668,41 +663,27 @@ export default function CreateDelegatedKeyScreen() {
       showRetryOption = true;
     }
     
-    const buttons = [
-      {
-        text: 'OK',
-        onPress: () => {
-          wsClient.disconnect();
-          setIsConnecting(false);
-          if (shouldNavigateBackToCreate) {
-            router.back();
-          }
-        }
-      }
-    ];
-
     if (showRetryOption) {
-      buttons.unshift({
-        text: 'Retry',
-        onPress: () => {
-          wsClient.resetConnection();
-          setIsConnecting(false);
-          // User can try again by clicking the create button
-        }
-      });
+      wsClient.resetConnection();
+    } else {
+      wsClient.disconnect();
     }
-    
-    Alert.alert(title, userFriendlyMessage, buttons);
+    setIsConnecting(false);
+    if (shouldNavigateBackToCreate) {
+      router.back();
+    }
+
+    showError(userFriendlyMessage, { title });
   };
 
   const handleCreateKey = async () => {
     if (!deviceName.trim()) {
-      Alert.alert('Error', 'Please enter a device name');
+      showError('Please enter a device name');
       return;
     }
 
     if (!isWatchConnected) {
-      Alert.alert('Error', 'Smart watch is not connected. Please ensure your Apple Watch is connected and try again.');
+      showError('Smart watch is not connected. Please ensure your Apple Watch is connected and try again.');
       return;
     }
 
@@ -716,15 +697,15 @@ export default function CreateDelegatedKeyScreen() {
       const hasNonTransferActions = callPolicySettings.allowedActions.some(id => id !== 'transfer');
 
       if (hasNonTransferActions && callPolicySettings.allowedTargets.length === 0) {
-        Alert.alert('Error', 'Please add at least one allowed target address for the selected actions');
+        showError('Please add at least one allowed target address for the selected actions');
         return;
       }
       if (needsEthTargets && callPolicySettings.allowedTargets.length === 0) {
-        Alert.alert('Error', 'Please add at least one allowed target address for ETH transfers');
+        showError('Please add at least one allowed target address for ETH transfers');
         return;
       }
       if (needsErc20Tokens && callPolicySettings.allowedTokens.length === 0) {
-        Alert.alert('Error', 'Please select at least one ERC20 token to allow transfers');
+        showError('Please select at least one ERC20 token to allow transfers');
         return;
       }
       if (needsErc20Tokens) {
@@ -733,7 +714,17 @@ export default function CreateDelegatedKeyScreen() {
                isNaN(parseFloat(t.maxValuePerDay)) || parseFloat(t.maxValuePerDay) <= 0
         );
         if (invalidToken) {
-          Alert.alert('Error', `Please set valid limits for ${invalidToken.symbol} (per tx and per day must be > 0)`);
+          showError(`Please set valid limits for ${invalidToken.symbol} (per tx and per day must be > 0)`);
+          return;
+        }
+
+        const invalidDailyGap = callPolicySettings.allowedTokens.find((t) => {
+          const perTx = parseFloat(t.maxValuePerTx);
+          const perDay = parseFloat(t.maxValuePerDay);
+          return !isNaN(perTx) && !isNaN(perDay) && perDay < perTx;
+        });
+        if (invalidDailyGap) {
+          showError(`${invalidDailyGap.symbol}: daily limit must be greater than or equal to the per transaction limit`);
           return;
         }
       }
@@ -744,7 +735,7 @@ export default function CreateDelegatedKeyScreen() {
           callPolicySettings.maxValuePerTx === '.' ||
           isNaN(numTxValue) ||
           numTxValue <= 0) {
-        Alert.alert('Error', 'Please set a valid maximum transaction amount greater than 0');
+        showError('Please set a valid maximum transaction amount greater than 0');
         return;
       }
       
@@ -754,12 +745,12 @@ export default function CreateDelegatedKeyScreen() {
           callPolicySettings.maxValuePerDay === '.' ||
           isNaN(numDayValue) ||
           numDayValue <= 0) {
-        Alert.alert('Error', 'Please set a valid maximum daily amount greater than 0');
+        showError('Please set a valid maximum daily amount greater than 0');
         return;
       }
 
       if (callPolicySettings.allowedActions.length === 0) {
-        Alert.alert('Error', 'Please select at least one action');
+        showError('Please select at least one action');
         return;
       }
     }
@@ -780,10 +771,9 @@ export default function CreateDelegatedKeyScreen() {
       // Temporary fallback for debugging
       if (!kernelAddress) {
         console.log('[create-key] -> KERNEL not found in config, using fallback');
-          Alert.alert(
-            'Configuration error',
-            'Kernel address is not configured. Please set KERNEL in your environment.'
-          );
+          showError('Kernel address is not configured. Please set KERNEL in your environment.', {
+            title: 'Configuration error',
+          });
           return;
       }
 
@@ -818,10 +808,7 @@ export default function CreateDelegatedKeyScreen() {
       console.error('Error generating key pair:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       
-      Alert.alert(
-        'Error', 
-        `Failed to generate key pair: ${errorMessage}\n\nPlease try again.`
-      );
+      showError(`Failed to generate key pair: ${errorMessage}\n\nPlease try again.`);
       setIsConnecting(false);
     }
   };
@@ -884,12 +871,19 @@ export default function CreateDelegatedKeyScreen() {
               disabled={isConnecting || !isWatchConnected || !isRestrictedValid()}
             >
               {isConnecting ? (
-                <>
-                  <IconSymbol name="arrow.clockwise" size={20} color="#FFFFFF" />
-                  <Text style={styles.createButtonText}>
-                    {generatedKeyPair ? 'Creating on Blockchain...' : 'Requesting Keys from Watch...'}
-                  </Text>
-                </>
+                generatedKeyPair ? (
+                  <>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.createButtonText}>
+                      {`${BLOCKCHAIN_STATUS_MESSAGES[blockchainStatusIndex]}${BLOCKCHAIN_LOADER_FRAMES[blockchainLoaderFrame]}`}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <IconSymbol name="arrow.clockwise" size={20} color="#FFFFFF" />
+                    <Text style={styles.createButtonText}>Requesting Keys from Watch...</Text>
+                  </>
+                )
               ) : !isWatchConnected ? (
                 <>
                   <IconSymbol name="xmark" size={20} color="#FFFFFF" />
@@ -961,6 +955,7 @@ export default function CreateDelegatedKeyScreen() {
           onCancel={() => handleAddressConfirmation(false)}
           onConfirm={() => handleAddressConfirmation(true)}
         />
+
     </SafeAreaView>
   );
 }

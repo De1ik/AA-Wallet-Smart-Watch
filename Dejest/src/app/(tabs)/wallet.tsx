@@ -1,1 +1,3 @@
-export { default } from '@/modules/account/screens/wallet-screen';
+import WalletScreen from '@/modules/account/screens/wallet-screen';
+
+export default WalletScreen;

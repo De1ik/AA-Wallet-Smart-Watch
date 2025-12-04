@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal, View, Text, TouchableOpacity, TextInput } from 'react-native';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { styles } from '../styles';
+import { COLORS } from '@/shared/constants/colors';
 
 type Props = {
   visible: boolean;
@@ -64,7 +65,7 @@ export const AddTargetModal = ({
           </View>
 
           <View style={styles.targetModalNote}>
-            <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
+            <IconSymbol name="info.circle" size={16} color={COLORS.purpleLight} />
             <Text style={styles.targetModalNoteText}>
               Make sure the address is a valid smart contract on the network you're using.
             </Text>

@@ -3,6 +3,7 @@ import { Modal, View, Text, TouchableOpacity } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { styles } from '../styles';
+import { COLORS } from '@/shared/constants/colors';
 import { WatchKeyPair } from '@/services/native/smartWatchBridge';
 
 type Props = {
@@ -41,7 +42,7 @@ export const AddressConfirmationModal = ({ visible, pendingKeyPair, onConfirm, o
                   }
                 }}
               >
-                <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
+                <IconSymbol name="doc.on.doc" size={16} color={COLORS.purpleLight} />
               </TouchableOpacity>
             </View>
           </View>

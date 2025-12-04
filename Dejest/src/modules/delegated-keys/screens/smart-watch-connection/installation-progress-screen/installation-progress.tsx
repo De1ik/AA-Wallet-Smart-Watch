@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -9,9 +9,42 @@ import { PermissionPolicyType } from '@/domain/types';
 
 const { width } = Dimensions.get('window');
 
+type InstallationProgressParams = {
+  deviceId?: string;
+  deviceName?: string;
+  keyType?: string;
+  origin?: string;
+};
+
 export default function InstallationProgressScreen() {
-  const { deviceId, deviceName, keyType } = useLocalSearchParams();
-  const { globalState, progressAnimation, completedSteps } = useInstallationProgress();
+  const params = useLocalSearchParams<InstallationProgressParams>();
+  const deviceId = Array.isArray(params.deviceId) ? params.deviceId[0] : params.deviceId;
+  const deviceName = Array.isArray(params.deviceName) ? params.deviceName[0] : params.deviceName;
+  const keyType = Array.isArray(params.keyType) ? params.keyType[0] : params.keyType;
+  const originParam = Array.isArray(params.origin) ? params.origin[0] : params.origin;
+  const cameFromList = originParam === 'list';
+  const { globalState, progressAnimation } = useInstallationProgress();
+  const parsedKeyType = typeof keyType === 'string' ? Number(keyType) : undefined;
+  const fallbackKeyType = Number.isFinite(parsedKeyType)
+    ? (parsedKeyType as PermissionPolicyType)
+    : PermissionPolicyType.CALL_POLICY;
+  const derivedKeyType = globalState.keyType ?? fallbackKeyType;
+  const steps = useMemo(() => {
+    const base = [
+      { label: 'Install permission validation', threshold: 10 },
+      { label: 'Grant delegated execution', threshold: 40 },
+    ];
+    if (derivedKeyType === PermissionPolicyType.CALL_POLICY) {
+      base.push(
+        { label: 'Apply recipient restrictions', threshold: 70 },
+        { label: 'Configure token allowances', threshold: 85 }
+      );
+    }
+    base.push({ label: 'Complete', threshold: 100 });
+    return base;
+  }, [derivedKeyType]);
+  const progressValue = globalState.progress ?? 0;
+  const completedSteps = steps.filter((step) => progressValue >= step.threshold).length;
 
   useEffect(() => {
     if (globalState.status?.step === 'completed') {
@@ -27,6 +60,10 @@ export default function InstallationProgressScreen() {
   }, [globalState.status]);
 
   const handleBack = () => {
+    if (cameFromList) {
+      router.back();
+      return;
+    }
     router.replace('/settings/smart-watch-connection/delegated-keys-list/smart-watch');
   };
 
@@ -78,11 +115,11 @@ export default function InstallationProgressScreen() {
 
         <View style={styles.card}>
           <View style={styles.progressSteps}>
-            {['Install', 'Grant Access', 'Complete'].map((label, idx) => {
-              const step = idx + 1;
-              const done = completedSteps >= step;
+            {steps.map((stepItem, idx) => {
+              const stepNumber = idx + 1;
+              const done = completedSteps >= stepNumber;
               return (
-                <View key={label} style={styles.progressStep}>
+                <View key={stepItem.label} style={styles.progressStep}>
                   <View
                     style={[
                       styles.progressStepIcon,
@@ -92,11 +129,16 @@ export default function InstallationProgressScreen() {
                     {done ? (
                       <IconSymbol name="checkmark" size={18} color="#FFFFFF" />
                     ) : (
-                      <Text style={styles.progressStepNumber}>{step}</Text>
+                      <Text style={styles.progressStepNumber}>{stepNumber}</Text>
                     )}
                   </View>
-                  <Text style={[styles.progressStepText, done ? styles.progressStepTextCompleted : styles.progressStepTextPending]}>
-                    {label}
+                  <Text
+                    style={[
+                      styles.progressStepText,
+                      done ? styles.progressStepTextCompleted : styles.progressStepTextPending,
+                    ]}
+                  >
+                    {stepItem.label}
                   </Text>
                 </View>
               );

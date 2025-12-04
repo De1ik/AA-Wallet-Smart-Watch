@@ -1,4 +1,4 @@
-import { ExecuteDelegateInstallation, PermissionPolicyType, PrepareDataForSigning } from "@/domain/types";
+import { ExecuteDelegateInstallation, PermissionPolicyType, PrepareDataForSigning, SignedDataForDelegateInstallation } from "@/domain/types";
 import { Address } from "viem";
 
 export interface HttpResult<T> {
@@ -60,6 +60,22 @@ export interface InstallExecuteSuccess {
   message: string;
 }
 
+// ------------------ revoke --------------
+
+export interface RevokePrepareInput {
+  delegatedEOA: Address;
+  kernelAddress: Address;
+}
+
+export interface RevokeExecuteInput {
+  revocationId: string;
+  delegatedEOA: Address;
+  kernelAddress: Address;
+  data: {
+    signedRevokeData: SignedDataForDelegateInstallation;
+  };
+}
+
 // ------------------ entry point deposit --------------
 
 export interface EntryPointDepositPrepareInput {
@@ -78,4 +94,3 @@ export interface executedEntryPointDeposit {
   data: { txHash: string, gasUsed: string };
   message: string;
 }
-

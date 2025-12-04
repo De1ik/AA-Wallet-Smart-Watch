@@ -11,6 +11,7 @@ import { debugLog, isDepositExecuteSuccess, isDepositPrepareSuccess } from '@/se
 import { processUnsigned } from '@/services/blockchain/signUOp';
 import { ErrorResponse, executedEntryPointDeposit, prepareEntryPointDeposit } from '@/services/api/apiTypes';
 import { useWallet } from '@/modules/account/state/WalletContext';
+import { useNotifications } from '@/shared/contexts/NotificationContext';
 
 // const FALLBACK_KERNEL = '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
 const FALLBACK_ENTRY_POINT = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
@@ -30,6 +31,7 @@ const formatEthValue = (value?: string) => {
 };
 
 export default function EntryPointScreen() {
+  const { showSuccess, showError, showInfo } = useNotifications();
   const [status, setStatus] = useState<PrefundCheckResponse | null>(null);
   const { wallet } = useWallet();
   const [isLoading, setIsLoading] = useState(true);
@@ -60,7 +62,7 @@ export default function EntryPointScreen() {
       setLastUpdated(Date.now());
     } catch (error) {
       console.error('[EntryPoint] Failed to load status:', error);
-      Alert.alert('Error', 'Unable to load EntryPoint status. Please try again.');
+      showError('Unable to load EntryPoint status. Please try again.')
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -70,18 +72,6 @@ export default function EntryPointScreen() {
   useEffect(() => {
     loadStatus();
   }, [loadStatus]);
-
-  const handleHealthCheck = async () => {
-    try {
-      console.log('[EntryPoint] Testing server connectivity...');
-      const response = await apiClient.healthCheck();
-      console.log('[EntryPoint] Health check response:', response);
-      Alert.alert('Server Status', `Server is running!\n\nStatus: ${response.status}\nTime: ${response.timestamp}`);
-    } catch (error: any) {
-      console.error('[EntryPoint] Health check failed:', error);
-      Alert.alert('Server Error', `Cannot connect to server:\n\n${error?.message || 'Unknown error'}`);
-    }
-  };
 
   const closeResultModal = () => {
     setResultModal(prev => ({ ...prev, visible: false }));
@@ -147,11 +137,8 @@ export default function EntryPointScreen() {
           success: false,
           title: 'Deposit Failed',
           message: resultDeposit.error || 'Unable to deposit to EntryPoint.',
-          // txHash: resultDeposit.data.txHash,
-          // gasUsed: resultDeposit.data.gasUsed,
-          // revertReason: resultDeposit.data.revertReason || response.error,
         });
-        return;
+        showError("Deposit was failed")
       } else {
         showResultModal({
           success: true,
@@ -161,6 +148,7 @@ export default function EntryPointScreen() {
           gasUsed: resultDeposit.data.gasUsed,
         });
         await loadStatus();
+        showSuccess("Deposit was confirmed")
       }
 
     } catch (error: any) {
@@ -285,7 +273,6 @@ export default function EntryPointScreen() {
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Deposit ETH</Text>
-          <Text style={styles.sectionSubtitle}>Add prefund to cover delegated key installations and transactions.</Text>
         </View>
         <View style={styles.card}>
           <View style={styles.inputGroup}>
@@ -313,16 +300,9 @@ export default function EntryPointScreen() {
               {isDepositing ? 'Submitting...' : 'Deposit to EntryPoint'}
             </Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={styles.healthCheckButton}
-            onPress={handleHealthCheck}
-          >
-            <IconSymbol name="heart.fill" size={16} color="#8B5CF6" />
-            <Text style={styles.healthCheckButtonText}>Test Server</Text>
-          </TouchableOpacity>
+
           <Text style={styles.depositHint}>
-            Deposits are sent from your root smart wallet account to the global EntryPoint contract and will be used to pay for future user operations.
+            Deposits are sent from your smart wallet to the global EntryPoint contract and will be used to pay fee to bundler for future user operations.
           </Text>
         </View>
       </ScrollView>
@@ -420,6 +400,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#FFFFFF',
+    marginEnd: 10
   },
   sectionSubtitle: {
     flex: 1,

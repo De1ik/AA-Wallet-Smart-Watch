@@ -1,1 +1,3 @@
-export { default } from '@/modules/onboarding/screens/create-kernel-screen';
+import CreateKernelScreen from '@/modules/onboarding/screens/create-kernel-screen';
+
+export default CreateKernelScreen;

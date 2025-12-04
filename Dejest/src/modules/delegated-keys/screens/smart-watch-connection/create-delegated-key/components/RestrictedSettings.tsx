@@ -28,14 +28,10 @@ type Props = {
   handleMaxValuePerDayChange: (val: string) => void;
 };
 
-const sanitizeNumericInput = (val: string) => val.replace(/[^0-9.]/g, '');
-const isValidPositiveNumber = (val: string) => {
-  if (!val || val === '.' || isNaN(Number(val))) return false;
-  return Number(val) > 0;
-};
-const isDailyNotLessThanTx = (tx: string, daily: string) => {
-  if (!isValidPositiveNumber(tx) || !isValidPositiveNumber(daily)) return false;
-  return Number(daily) >= Number(tx);
+const sanitizeNumericInput = (val: string) => {
+  const filtered = val.replace(/[^0-9.]/g, '');
+  const parts = filtered.split('.');
+  return parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : filtered;
 };
 
 export const RestrictedSettings = ({
@@ -137,7 +133,6 @@ export const RestrictedSettings = ({
                 value={token.maxValuePerTx}
                 onChangeText={(raw) => {
                   const val = sanitizeNumericInput(raw);
-                  if (val && !isValidPositiveNumber(val)) return;
                   setCallPolicySettings((prev) => {
                     const copy = [...prev.allowedTokens];
                     copy[idx] = { ...copy[idx], maxValuePerTx: val };
@@ -156,8 +151,6 @@ export const RestrictedSettings = ({
                 value={token.maxValuePerDay}
                 onChangeText={(raw) => {
                   const val = sanitizeNumericInput(raw);
-                  if (val && !isValidPositiveNumber(val)) return;
-                  if (val && !isDailyNotLessThanTx(token.maxValuePerTx, val)) return;
                   setCallPolicySettings((prev) => {
                     const copy = [...prev.allowedTokens];
                     copy[idx] = { ...copy[idx], maxValuePerDay: val };
@@ -274,7 +267,6 @@ export const RestrictedSettings = ({
             value={callPolicySettings.maxValuePerTx}
             onChangeText={(raw) => {
               const val = sanitizeNumericInput(raw);
-              if (val && !isValidPositiveNumber(val)) return;
               handleMaxValuePerTxChange(val);
             }}
             placeholder="0.1"
@@ -291,8 +283,6 @@ export const RestrictedSettings = ({
             value={callPolicySettings.maxValuePerDay}
             onChangeText={(raw) => {
               const val = sanitizeNumericInput(raw);
-              if (val && !isValidPositiveNumber(val)) return;
-              if (val && !isDailyNotLessThanTx(callPolicySettings.maxValuePerTx, val)) return;
               handleMaxValuePerDayChange(val);
             }}
             placeholder="1.0"

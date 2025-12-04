@@ -1,1 +1,3 @@
-export { default } from '@/modules/entrypoint/screens/entry-point-screen';
+import EntryPointScreen from '@/modules/entrypoint/screens/entry-point-screen';
+
+export default EntryPointScreen;

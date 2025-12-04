@@ -3,13 +3,12 @@ import { config } from '@/config/env';
 
 import { 
   PrefundCheckResponse,
-  RevokeKeyResponse,
   BalancesResponse,
   TransactionsResponse,
   SendTransactionResponse,
-  CallPolicyResponse
+  CallPolicyResponse,
 } from '@/domain/types';
-import { EntryPointDepositPrepareInput, InstallExecuteInput, InstallPrepareInput } from './apiTypes';
+import { EntryPointDepositPrepareInput, InstallExecuteInput, InstallPrepareInput, RevokeExecuteInput, RevokePrepareInput } from './apiTypes';
 
 import {
   BalancesResponseSchema,
@@ -21,7 +20,8 @@ import {
   InstallExecuteResultSchema,
   InstallPrepareResultSchema,
   PrefundCheckResponseSchema,
-  RevokeKeyResponseSchema,
+  RevokeExecuteResultSchema,
+  RevokePrepareResultSchema,
   SendTransactionResponseSchema,
   TransactionsResponseSchema,
   type DelegatedKeysResponse,
@@ -30,6 +30,8 @@ import {
   type HealthCheckResponse,
   type InstallExecuteResult,
   type InstallPrepareResult,
+  type RevokeExecuteResult,
+  type RevokePrepareResult,
 } from './schemas';
 import { debugLog } from '@/shared/helpers/helper';
 
@@ -87,12 +89,21 @@ class ApiClient {
   }
 
   // Revoke delegated key access
-  async revokeKey(delegatedEOA: string, kernelAddress: string): Promise<RevokeKeyResponse> {
-    const data = await this.makeRequest('/wallet/revoke', {
+  async prepareRevokeKey(params: RevokePrepareInput): Promise<RevokePrepareResult> {
+    const data = await this.makeRequest('/wallet/delegated/revoke/prepare-data', {
       method: 'POST',
-      body: JSON.stringify({ delegatedEOA, kernelAddress }),
+      body: JSON.stringify(params),
     });
-    return RevokeKeyResponseSchema.parse(data);
+    return RevokePrepareResultSchema.parse(data);
+  }
+
+  // Revoke delegated key access
+  async executeRevokeKey(params: RevokeExecuteInput): Promise<RevokeExecuteResult> {
+    const data = await this.makeRequest('/wallet/delegated/revoke/execute', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return RevokeExecuteResultSchema.parse(data);
   }
 
 

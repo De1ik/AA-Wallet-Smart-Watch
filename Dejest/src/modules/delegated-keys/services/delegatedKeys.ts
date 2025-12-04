@@ -186,6 +186,23 @@ export const removeDelegatedKey = async (id: string): Promise<void> => {
 };
 
 /**
+ * Remove a delegated key by its public address
+ */
+export const removeDelegatedKeyByAddress = async (publicAddress: string): Promise<void> => {
+  try {
+    const keys = await getDelegatedKeys();
+    const filteredKeys = keys.filter(
+      key => key.publicAddress.toLowerCase() !== publicAddress.toLowerCase()
+    );
+    await AsyncStorage.setItem('delegatedKeys', JSON.stringify(filteredKeys));
+    console.log('Delegated key removed successfully by address:', publicAddress);
+  } catch (error) {
+    console.error('Error removing delegated key by address:', error);
+    throw error;
+  }
+};
+
+/**
  * Remove all stuck installations (installing status)
  */
 export const removeStuckInstallations = async (): Promise<void> => {

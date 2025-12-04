@@ -1,1 +1,3 @@
-export { default } from '@/modules/account/screens/receive-screen';
+import ReceiveScreen from '@/modules/account/screens/receive-screen';
+
+export default ReceiveScreen;

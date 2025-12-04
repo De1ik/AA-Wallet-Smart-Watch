@@ -1,1 +1,3 @@
-export { default } from '@/modules/account/screens/transactions-screen';
+import TransactionsScreen from '@/modules/account/screens/transactions-screen';
+
+export default TransactionsScreen;

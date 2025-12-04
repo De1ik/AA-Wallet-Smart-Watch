@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator, Clipboard, Modal, Animated } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator, Clipboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
@@ -14,7 +14,7 @@ import { HeaderBar } from './components/HeaderBar';
 import { Description } from './components/Description';
 import { CreateKeyButton } from './components/CreateKeyButton';
 import { OngoingInstallationCard } from './components/OngoingInstallationCard';
-import { formatUnits } from 'viem';
+import { Address, formatUnits } from 'viem';
 import { AddressModal } from './components/AddressModal';
 import { RestrictionsModal, RestrictionDetails } from './components/RestrictionsModal';
 
@@ -23,8 +23,12 @@ import { DeviceDetailsModal } from './components/DeviceDetailsModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { getDelegatedKeys as getDelegatedKeysStorage } from '@/modules/delegated-keys/services/delegatedKeys';
 import { useWallet } from '@/modules/account/state/WalletContext';
-import { PermissionPolicyType } from '@/domain/types';
+import { PermissionPolicyType, PrepareDataForSigning } from '@/domain/types';
 import { debugLog } from '@/services/api/helpers';
+import { validateUserOperation } from '@/services/blockchain/signUOp';
+import { useNotifications } from '@/shared/contexts/NotificationContext';
+import { PackedUserOperation } from '@/services/blockchain/types';
+import { transactionReviewState } from '@/services/storage/transactionReviewState';
 
 const formatTokenLimit = (txLimit: string, dailyLimit: string, decimals?: number, symbol?: string) => {
   try {
@@ -37,6 +41,31 @@ const formatTokenLimit = (txLimit: string, dailyLimit: string, decimals?: number
   }
 };
 
+const normalizePackedForValidation = (packed: PackedUserOperation | Record<string, any>): PackedUserOperation => {
+  const source = packed as Record<string, any>;
+  return {
+    ...(packed as PackedUserOperation),
+    nonce: typeof source.nonce === 'string' ? BigInt(source.nonce) : source.nonce,
+    preVerificationGas:
+      typeof source.preVerificationGas === 'string' ? BigInt(source.preVerificationGas) : source.preVerificationGas,
+  };
+};
+
+const calculateRevocationGasEstimate = (unpacked?: PrepareDataForSigning['unpacked']) => {
+  if (!unpacked) return null;
+  try {
+    const callGas = BigInt(unpacked.callGasLimit);
+    const verificationGas = BigInt(unpacked.verificationGasLimit);
+    const preVerificationGas = BigInt(unpacked.preVerificationGas);
+    const maxFeePerGas = BigInt(unpacked.maxFeePerGas);
+    const totalGasUnits = callGas + verificationGas + preVerificationGas;
+    const totalCostWei = totalGasUnits * maxFeePerGas;
+    return { totalGasUnits, totalCostWei };
+  } catch {
+    return null;
+  }
+};
+
 export default function SmartWatchScreen() {
   const [connectedDevices, setConnectedDevices] = useState<DelegatedKeyData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -45,7 +74,6 @@ export default function SmartWatchScreen() {
   const [revokeAddress, setRevokeAddress] = useState('');
   const [showDeviceDetails, setShowDeviceDetails] = useState(false);
   const [selectedDeviceForDetails, setSelectedDeviceForDetails] = useState<DelegatedKeyData | null>(null);
-  const [isRevoking, setIsRevoking] = useState(false);
   const [showAddressModal, setShowAddressModal] = useState(false);
   const [selectedAddress, setSelectedAddress] = useState('');
   const [ongoingInstallation, setOngoingInstallation] = useState<DelegatedKeyData | null>(null);
@@ -57,12 +85,12 @@ export default function SmartWatchScreen() {
   const [isLoadingRestrictions, setIsLoadingRestrictions] = useState(false);
   const [isSyncingKeys, setIsSyncingKeys] = useState(false);
   const [nameEdits, setNameEdits] = useState<Record<string, string>>({});
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastSuccess, setToastSuccess] = useState(false);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmPayload, setConfirmPayload] = useState<{ device?: DelegatedKeyData; address?: string } | null>(null);
-  const { wallet } = useWallet()
+  const [isPreparingRevocation, setIsPreparingRevocation] = useState(false);
+  const { wallet } = useWallet();
+  const { showSuccess, showError, showInfo } = useNotifications();
+  const isRevocationBusy = isPreparingRevocation;
 
   // Load delegated keys on component mount and when focused
 
@@ -232,7 +260,7 @@ export default function SmartWatchScreen() {
       setSelectedDeviceForRestrictions((prev) => (prev && prev.id === device.id ? prev : prev));
     } catch (error: any) {
       console.error('[Restrictions] Error fetching details:', error);
-      Alert.alert('Error', error?.message || 'Failed to fetch call policy details');
+      showError(error?.message || 'Failed to fetch call policy details');
     } finally {
       setIsLoadingRestrictions(false);
       if (isManualRefresh) {
@@ -251,20 +279,62 @@ export default function SmartWatchScreen() {
     setConfirmVisible(true);
   };
 
+  const revokeDelegatedKey = async (delegatedAddress: string, device?: DelegatedKeyData) => {
+    const kernelAddress = wallet?.smartWalletAddress;
+    if (!kernelAddress) {
+      showError('Smart wallet address is not available');
+      return;
+    }
 
-  const showToast = (message: string, success = false) => {
-    setToastMessage(message);
-    setToastSuccess(success);
-    Animated.sequence([
-      Animated.timing(toastOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
-      Animated.delay(1400),
-      Animated.timing(toastOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => setToastMessage(''));
+    setIsPreparingRevocation(true);
+    try {
+      const prepareResult = await apiClient.prepareRevokeKey({
+        delegatedEOA: delegatedAddress as Address,
+        kernelAddress: kernelAddress as Address,
+      });
+
+      if (!('revocationId' in prepareResult) || !prepareResult.success) {
+        const errorMessage = (prepareResult as any)?.error || 'Failed to prepare revocation';
+        throw new Error(errorMessage);
+      }
+
+      const normalizedPacked = normalizePackedForValidation(prepareResult.data.packed);
+      const isHashValid = await validateUserOperation(normalizedPacked, prepareResult.data.userOpHash);
+      if (!isHashValid) {
+        throw new Error('User operation hash validation failed');
+      }
+
+      const gasEstimate = calculateRevocationGasEstimate(prepareResult.data.unpacked);
+      const serverEstimateWei = prepareResult.estimatedFeeWei
+        ? BigInt(prepareResult.estimatedFeeWei)
+        : undefined;
+      const combinedEstimate = serverEstimateWei ?? gasEstimate?.totalCostWei;
+
+      transactionReviewState.set({
+        kind: 'delegated-revocation',
+        payload: {
+          deviceId: device?.id,
+          deviceName: device?.deviceName,
+          delegatedAddress: delegatedAddress as Address,
+          kernelAddress: kernelAddress as Address,
+          revocationId: prepareResult.revocationId,
+          unsignedRevokeData: prepareResult.data,
+          gasEstimateWei: combinedEstimate ? combinedEstimate.toString() : undefined,
+        },
+      });
+
+      router.push('/settings/smart-watch-connection/transaction-review');
+    } catch (error: any) {
+      console.error('Error preparing revocation:', error);
+      showError(error?.message || 'Failed to prepare revocation');
+    } finally {
+      setIsPreparingRevocation(false);
+    }
   };
 
   const handleCopyAddress = (address: string) => {
     Clipboard.setString(address);
-    showToast('Delegated public key copied');
+    showInfo('Delegated public key copied');
   };
 
   const handleShowFullAddress = (address: string) => {
@@ -284,6 +354,7 @@ export default function SmartWatchScreen() {
         deviceId: device.id,
         deviceName: device.deviceName,
         keyType: device.keyType,
+        origin: 'list',
       }
     });
   };
@@ -305,7 +376,7 @@ export default function SmartWatchScreen() {
         await clearAllDelegatedKeys();
         setConnectedDevices([]);
         setOngoingInstallation(null);
-        showToast('No delegated keys found on-chain. Local cache cleared.', true);
+        showInfo('No delegated keys found on-chain. Local cache cleared.');
         return;
       }
 
@@ -368,10 +439,10 @@ export default function SmartWatchScreen() {
       setOngoingInstallation(
         refreshedDevices.find(k => k.installationStatus === 'installing' || k.installationStatus === 'granting') || null
       );
-      showToast('Delegated keys refreshed', true);
+      showSuccess('Delegated keys refreshed');
     } catch (error: any) {
       console.error('[Sync Keys] Error:', error);
-      Alert.alert('Error', error?.message || 'Failed to refresh delegated keys from contract.');
+      showError(error?.message || 'Failed to refresh delegated keys from contract.');
     } finally {
       setIsSyncingKeys(false);
       await loadDelegatedKeys();
@@ -385,7 +456,7 @@ export default function SmartWatchScreen() {
   const saveEditedName = async (device: DelegatedKeyData) => {
     const newName = nameEdits[device.id]?.trim();
     if (!newName) {
-      Alert.alert('Error', 'Device name cannot be empty.');
+      showError('Device name cannot be empty.');
       return;
     }
     await updateDelegatedKey(device.id, { deviceName: newName });
@@ -410,10 +481,10 @@ export default function SmartWatchScreen() {
             try {
               await removeStuckInstallations();
               await loadDelegatedKeys();
-              Alert.alert('Success', 'Stuck installations removed successfully');
+              showSuccess('Stuck installations removed successfully');
             } catch (error) {
               console.error('Error removing stuck installations:', error);
-              Alert.alert('Error', 'Failed to remove stuck installations');
+              showError('Failed to remove stuck installations');
             }
           }
         }
@@ -434,10 +505,10 @@ export default function SmartWatchScreen() {
             try {
               await clearAllDelegatedKeys();
               await loadDelegatedKeys();
-              Alert.alert('Success', 'All delegated keys cleared successfully');
+              showSuccess('All delegated keys cleared successfully');
             } catch (error) {
               console.error('Error clearing all keys:', error);
-              Alert.alert('Error', 'Failed to clear all keys');
+              showError('Failed to clear all keys');
             }
           }
         }
@@ -448,7 +519,7 @@ export default function SmartWatchScreen() {
 
   const handleRevokeAllKeys = () => {
     if (connectedDevices.length === 0) {
-      Alert.alert('Info', 'No delegated keys to revoke');
+      showInfo('No delegated keys to revoke');
       return;
     }
 
@@ -467,10 +538,10 @@ export default function SmartWatchScreen() {
                 await removeDelegatedKey(device.id);
               }
               await loadDelegatedKeys();
-              Alert.alert('Success', 'All delegated keys have been revoked successfully');
+              showSuccess('All delegated keys have been revoked successfully');
             } catch (error) {
               console.error('Error revoking all delegated keys:', error);
-              Alert.alert('Error', 'Failed to revoke some or all delegated keys');
+              showError('Failed to revoke some or all delegated keys');
             }
           }
         }
@@ -486,7 +557,17 @@ export default function SmartWatchScreen() {
         <View style={styles.content}>
           <HeaderBar />
           <Description />
+          
           <CreateKeyButton onPress={handleCreateDelegatedKey} />
+
+                    {/* Security Notice */}
+          <View style={styles.securityNotice}>
+            <IconSymbol name="exclamationmark.triangle.fill" size={20} color="#F59E0B" />
+            <Text style={styles.securityNoticeText}>
+              Delegated keys allow your smart watch to perform transactions on your behalf. 
+              Choose permissions carefully and monitor usage regularly.
+            </Text>
+          </View>
 
           {/* Ongoing Installation */}
           {ongoingInstallation && (
@@ -512,7 +593,7 @@ export default function SmartWatchScreen() {
                   <IconSymbol name="arrow.clockwise" size={16} color="#8B5CF6" />
                 )}
                 <Text style={styles.refreshFromContractText}>
-                  {isSyncingKeys ? 'Syncing...' : 'Sync from Contract'}
+                  {isSyncingKeys ? 'Syncing...' : 'Refresh installed keys'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -590,15 +671,15 @@ export default function SmartWatchScreen() {
                     <TouchableOpacity
                       style={styles.revokeButton}
                       onPress={() => handleRevokeDevice(device)}
-                      disabled={isRevoking}
+                      disabled={isRevocationBusy}
                     >
-                      {isRevoking ? (
+                      {isRevocationBusy ? (
                         <ActivityIndicator size="small" color="#FFFFFF" />
                       ) : (
                         <IconSymbol name="trash" size={16} color="#FFFFFF" />
                       )}
                       <Text style={styles.revokeButtonText}>
-                        {isRevoking ? 'Revoking...' : 'Revoke'}
+                        {isRevocationBusy ? 'Processing...' : 'Revoke'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -616,10 +697,10 @@ export default function SmartWatchScreen() {
           </View>
 
           {/* Revoke Keys Section */}
-          <View style={styles.section}>
+          {/* <View style={styles.section}>
             <Text style={styles.sectionTitle}>Revoke Delegated Keys</Text>
 
-            {/* Revoke All Keys */}
+            
             <View style={styles.revokeSection}>
               <Text style={styles.revokeSectionTitle}>Revoke All Keys</Text>
               <TouchableOpacity
@@ -630,16 +711,7 @@ export default function SmartWatchScreen() {
                 <Text style={styles.revokeAllButtonText}>Revoke All Delegated Keys</Text>
               </TouchableOpacity>
             </View>
-          </View>
-
-          {/* Security Notice */}
-          <View style={styles.securityNotice}>
-            <IconSymbol name="exclamationmark.triangle.fill" size={20} color="#F59E0B" />
-            <Text style={styles.securityNoticeText}>
-              Delegated keys allow your smart watch to perform transactions on your behalf. 
-              Choose permissions carefully and monitor usage regularly.
-            </Text>
-          </View>
+          </View>  */}
         </View>
       </ScrollView>
 
@@ -702,69 +774,13 @@ export default function SmartWatchScreen() {
         onConfirm={async () => {
           setConfirmVisible(false);
           if (confirmPayload?.device) {
-            try {
-              setIsRevoking(true);
-              const response = await apiClient.revokeKey(confirmPayload.device.publicAddress, wallet!.smartWalletAddress!);
-              if (response.success) {
-                await removeDelegatedKey(confirmPayload.device.id);
-                await loadDelegatedKeys();
-                setShowDeviceDetails(false);
-                setSelectedDeviceForDetails(null);
-                showToast('Delegated key revoked', true);
-              } else {
-                Alert.alert('Error', 'Failed to revoke delegated key');
-              }
-            } catch (error) {
-              console.error('Error revoking delegated key:', error);
-              Alert.alert('Error', 'Failed to revoke delegated key');
-            } finally {
-              setIsRevoking(false);
-            }
+            await revokeDelegatedKey(confirmPayload.device.publicAddress, confirmPayload.device);
           } else if (confirmPayload?.address) {
-            setIsRevoking(true);
-            try {
-              const response = await apiClient.revokeKey(confirmPayload.address, wallet!.smartWalletAddress!);
-              if (response.success) {
-                try {
-                  const keys = await getDelegatedKeys();
-                  const keyToRevoke = keys.find(
-                    key => key.publicAddress.toLowerCase() === confirmPayload.address!.toLowerCase()
-                  );
-                  if (keyToRevoke) {
-                    await removeDelegatedKey(keyToRevoke.id);
-                  }
-                } catch (localError) {
-                  console.warn('Could not remove from local storage:', localError);
-                }
-                await loadDelegatedKeys();
-                setRevokeAddress('');
-                showToast('Delegated key revoked', true);
-              } else {
-                Alert.alert('Error', 'Failed to revoke delegated key');
-              }
-            } catch (error: any) {
-              console.error('Error revoking delegated key:', error);
-              const errorMessage = error?.message || 'Failed to revoke delegated key';
-              Alert.alert('Error', errorMessage);
-            } finally {
-              setIsRevoking(false);
-            }
+            await revokeDelegatedKey(confirmPayload.address);
           }
           setConfirmPayload(null);
         }}
       />
-
-      {toastMessage ? (
-        <Animated.View
-          style={[
-            styles.toastContainer,
-            toastSuccess && styles.toastSuccess,
-            { opacity: toastOpacity },
-          ]}
-        >
-          <Text style={styles.toastText}>{toastMessage}</Text>
-        </Animated.View>
-      ) : null}
 
       {/* Debug/Cleanup Section */}
       {/* {(ongoingInstallation || connectedDevices.length > 0) && (

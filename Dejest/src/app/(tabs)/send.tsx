@@ -1,1 +1,3 @@
-export { default } from '@/modules/account/screens/send-screen';
+import SendScreen from '@/modules/account/screens/send-screen';
+
+export default SendScreen;

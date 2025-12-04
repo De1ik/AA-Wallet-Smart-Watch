@@ -3,6 +3,7 @@ import { Modal, View, Text, TouchableOpacity, TextInput, ScrollView } from 'reac
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { styles } from '../styles';
 import { PredefinedAction } from '@/modules/delegated-keys/services/delegatedKeys';
+import { COLORS } from '@/shared/constants/colors';
 
 type Props = {
   visible: boolean;
@@ -81,7 +82,7 @@ export const ActionSelectorModal = ({
                 <Text style={styles.actionListItemDescription}>{action.description}</Text>
                 <Text style={styles.actionListItemSelector}>Selector: {action.selector}</Text>
               </View>
-              {allowedActions.includes(action.id) && <IconSymbol name="checkmark" size={20} color="#10B981" />}
+              {allowedActions.includes(action.id) && <IconSymbol name="checkmark" size={20} color={COLORS.green} />}
             </TouchableOpacity>
           ))}
         </ScrollView>

@@ -89,7 +89,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 12,
+    marginBottom: 17,
   },
   deviceCard: {
     backgroundColor: '#1A1A1A',
@@ -304,6 +304,101 @@ export const styles = StyleSheet.create({
   confirmConfirmText: {
     fontWeight: '700',
   },
+  reviewModal: {
+    width: '100%',
+    backgroundColor: '#111111',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#2D2D2D',
+    gap: 12,
+  },
+  reviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  reviewTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  reviewSubtitle: {
+    color: '#A1A1AA',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  reviewSection: {
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  reviewLabel: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  reviewValue: {
+    fontSize: 15,
+    color: '#F9FAFB',
+    fontWeight: '600',
+  },
+  reviewValueMonospace: {
+    fontSize: 13,
+    color: '#E5E7EB',
+    fontFamily: 'Courier',
+    flexWrap: 'wrap',
+  },
+  reviewWarning: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#2F1F1F',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#4B1F1F',
+  },
+  reviewWarningText: {
+    color: '#FCD34D',
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  reviewActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 12,
+  },
+  reviewCancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2D2D2D',
+    backgroundColor: '#1F1F1F',
+    alignItems: 'center',
+  },
+  reviewCancelText: {
+    color: '#E5E7EB',
+    fontWeight: '600',
+  },
+  reviewConfirmButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#F87171',
+    alignItems: 'center',
+  },
+  reviewConfirmButtonDisabled: {
+    opacity: 0.6,
+  },
+  reviewConfirmText: {
+    color: '#111111',
+    fontWeight: '700',
+  },
   detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -404,6 +499,7 @@ export const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#8B5CF6',
     gap: 12,
+    marginBottom: 25
   },
   securityNoticeText: {
     flex: 1,

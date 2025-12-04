@@ -10,7 +10,8 @@ import {
   PermissionPolicyType,
   PrefundCheckResponse,
   PrepareDataForSigning,
-  RevokeKeyResponse,
+  RevokeExecuteSuccess,
+  RevokePrepareSuccess,
   SendTransactionResponse,
   SignedDataForDelegateInstallation,
   TokenBalance,
@@ -30,21 +31,22 @@ const addressString = z
   .string()
   .refine((value): value is Address => isAddress(value), 'Invalid address') as z.ZodType<Address>;
 
+const decimalString = (field: string) =>
+  z
+    .string()
+    .refine((value) => /^[0-9]+(\.[0-9]+)?$/.test(value), `${field} must be a numeric string`);
+
 const prepareDataForSigningSchema: z.ZodType<PrepareDataForSigning> = z.object({
   unpacked: z.any(),
   packed: z.any(),
   userOpHash: hexString,
+  estimatedFeeWei: decimalString('estimatedFeeWei').optional(),
 });
 
 const signedDataSchema: z.ZodType<SignedDataForDelegateInstallation> = z.object({
   unpacked: z.any(),
   signature: hexString,
 });
-
-const decimalString = (field: string) =>
-  z
-    .string()
-    .refine((value) => /^[0-9]+(\.[0-9]+)?$/.test(value), `${field} must be a numeric string`);
 
 const tokenBalanceSchema: z.ZodType<TokenBalance> = z.object({
   symbol: z.string(),
@@ -124,12 +126,6 @@ export const CallPolicyResponseSchema: z.ZodType<CallPolicyResponse> = z.object(
   data: callPolicyDataSchema,
 });
 
-export const RevokeKeyResponseSchema: z.ZodType<RevokeKeyResponse> = z.object({
-  success: z.boolean(),
-  txHash: hexString,
-  message: z.string(),
-});
-
 export const SendTransactionResponseSchema: z.ZodType<SendTransactionResponse> = z.object({
   success: z.boolean(),
   txHash: hexString,
@@ -189,6 +185,27 @@ const executeDelegateInstallationSchema = z.object({
 
 export const InstallExecuteResultSchema = InstallExecuteSuccessSchema.or(ErrorResponseSchema);
 export type InstallExecuteResult = z.infer<typeof InstallExecuteResultSchema>;
+
+export const RevokePrepareSchema: z.ZodType<RevokePrepareSuccess> = z.object({
+  success: z.boolean(),
+  revocationId: z.string(),
+  data: prepareDataForSigningSchema,
+  estimatedFeeWei: decimalString('estimatedFeeWei').optional(),
+  message: z.string(),
+});
+
+export const RevokeExecuteSchema: z.ZodType<RevokeExecuteSuccess> = z.object({
+  success: z.boolean(),
+  revocationId: z.string(),
+  txHash: hexString,
+  message: z.string(),
+});
+
+export const RevokePrepareResultSchema = RevokePrepareSchema.or(ErrorResponseSchema);
+export type RevokePrepareResult = z.infer<typeof RevokePrepareResultSchema>;
+
+export const RevokeExecuteResultSchema = RevokeExecuteSchema.or(ErrorResponseSchema);
+export type RevokeExecuteResult = z.infer<typeof RevokeExecuteResultSchema>;
 
 export const EntryPointDepositPrepareSchema: z.ZodType<prepareEntryPointDeposit> = z.object({
   success: z.boolean(),

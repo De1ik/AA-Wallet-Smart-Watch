@@ -211,12 +211,6 @@ export interface EntryPointDepositResponse {
   details?: string;
 }
 
-export interface RevokeKeyResponse {
-  success: boolean;
-  txHash: string;
-  message: string;
-}
-
 export interface TokenBalance {
   symbol: string;
   name: string;
@@ -277,6 +271,7 @@ export interface PrepareDataForSigning {
   unpacked: UnpackedUserOperationV07;
   packed: PackedUserOperation;
   userOpHash: Hex;
+  estimatedFeeWei?: string;
 }
 
 
@@ -311,5 +306,35 @@ export interface InstallExecuteInput {
 export interface InstallExecuteSuccess {
   success: boolean;
   installationId: string;
+  message: string;
+}
+
+
+
+
+
+export interface RevokePrepareSuccess {
+  success: boolean;
+  revocationId: string;
+  data: PrepareDataForSigning;
+  estimatedFeeWei?: string;
+  message: string;
+}
+
+export interface ExecuteDelegateRevoke {
+  signedRevokeData: SignedDataForDelegateInstallation;
+}
+
+export interface RevokeExecuteInput {
+  revocationId: string;
+  delegatedEOA: Address;
+  kernelAddress: Address;
+  data: ExecuteDelegateRevoke;
+}
+
+export interface RevokeExecuteSuccess {
+  success: boolean;
+  revocationId: string;
+  txHash: Hex;
   message: string;
 }
