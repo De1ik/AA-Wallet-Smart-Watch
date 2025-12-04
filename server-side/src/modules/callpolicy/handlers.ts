@@ -30,6 +30,7 @@ import {
 import {
   findTokenMeta,
 } from "./helpers";
+import { debugLog } from "../../shared/helpers/helper";
 
 type Result<T> = Promise<HttpResult<T | ErrorResponse>>;
 
@@ -47,6 +48,8 @@ export async function handleCallPolicyInfo(body: unknown): Result<any> {
     if (!info) {
       return { status: 404, body: { success: false, error: "Policy not found" } };
     }
+
+    debugLog("Data for response 32:", info)
 
     const tokensWithUsage = await Promise.all(
       info.allowedTokens.map(async (t: any) => {
@@ -94,7 +97,6 @@ export async function handleCallPolicyInfo(body: unknown): Result<any> {
       delegatedKey,
       policyId,
       data: {
-        delegatedKey: info.delegatedKey,
         status: info.status,
         statusText: info.status === 0 ? "NA" : info.status === 1 ? "Live" : "Deprecated",
         isActive: info.isActive,
@@ -139,6 +141,7 @@ export async function handleCallPolicyStatus(body: unknown): Result<any> {
     return ok({
       success: true,
       delegatedKey,
+      delegatedEOA: delegatedKey,
       policyId,
       status,
       statusText: status === 0 ? "NA" : status === 1 ? "Live" : "Deprecated",
