@@ -1035,6 +1035,28 @@ export const styles = StyleSheet.create({
     color: '#A0A0A0',
     lineHeight: 16,
   },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 8,
+  },
+  summaryLabel: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    flex: 1,
+  },
+  summaryValue: {
+    fontSize: 12,
+    color: '#F3F4F6',
+    flex: 2,
+    textAlign: 'right',
+  },
+  summaryFootnote: {
+    marginTop: 10,
+    fontSize: 11,
+    color: '#6B7280',
+  },
   
   // Target Modal Styles
   targetModal: {

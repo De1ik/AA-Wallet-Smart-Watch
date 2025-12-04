@@ -34,6 +34,8 @@ const sanitizeNumericInput = (val: string) => {
   return parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : filtered;
 };
 
+const shortAddress = (address: string) => `${address.slice(0, 6)}...${address.slice(-4)}`;
+
 export const RestrictedSettings = ({
   callPolicySettings,
   setCallPolicySettings,
@@ -52,7 +54,35 @@ export const RestrictedSettings = ({
   setShowActionSelector,
   handleMaxValuePerTxChange,
   handleMaxValuePerDayChange,
-}: Props) => (
+}: Props) => {
+  const actionSummaries = callPolicySettings.allowedActions
+    .map((actionId) => {
+      if (actionId === 'transfer') {
+        if (!transferEnabled) return null;
+        const modes: string[] = [];
+        if (transferOptions.eth) modes.push('ETH');
+        if (transferOptions.erc20) modes.push('ERC20');
+        return modes.length ? `Transfer (${modes.join(', ')})` : 'Transfer';
+      }
+      const action = PREDEFINED_ACTIONS.find((a) => a.id === actionId);
+      return action?.name ?? actionId;
+    })
+    .filter((val): val is string => Boolean(val));
+
+  const targetSummary = callPolicySettings.allowedTargets
+    .map((target) => target.name || shortAddress(target.address))
+    .join(', ');
+
+  const tokenSummaries = callPolicySettings.allowedTokens.map(
+    (token) => `${token.symbol || token.name} (${token.maxValuePerTx}/${token.maxValuePerDay})`
+  );
+
+  const shouldShowSummary =
+    callPolicySettings.allowedTargets.length > 0 ||
+    callPolicySettings.allowedTokens.length > 0 ||
+    callPolicySettings.allowedActions.length > 0;
+
+  return (
   <View style={styles.section}>
     <Text style={styles.sectionTitle}>Restricted Access Settings</Text>
     <Text style={styles.sectionSubtitle}>Configure allowed targets, actions, and spending limits</Text>
@@ -295,18 +325,49 @@ export const RestrictedSettings = ({
     </View>
 
     {/* Summary */}
-    {(callPolicySettings.allowedTargets.length > 0 ||
-      callPolicySettings.allowedTokens.length > 0) &&
-      callPolicySettings.allowedActions.length > 0 && (
+    {shouldShowSummary && (
         <View style={styles.summaryContainer}>
           <Text style={styles.summaryTitle}>Permission Summary</Text>
           <Text style={styles.summaryText}>
-            Your watch can perform {callPolicySettings.allowedActions.length} action(s) on{' '}
-            {callPolicySettings.allowedTargets.length} contract(s) and {callPolicySettings.allowedTokens.length} token(s)
-            with a maximum of {callPolicySettings.maxValuePerTx} units per transaction and{' '}
-            {callPolicySettings.maxValuePerDay} units per day (ETH uses 18 decimals; ERC20 uses token decimals).
+            {callPolicySettings.allowedActions.length} action(s) • {callPolicySettings.allowedTargets.length} contract(s) •{' '}
+            {callPolicySettings.allowedTokens.length} token(s)
           </Text>
+
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Actions</Text>
+            <Text style={styles.summaryValue}>
+              {actionSummaries.length ? actionSummaries.join(', ') : 'None selected'}
+            </Text>
+          </View>
+
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Targets</Text>
+            <Text style={styles.summaryValue}>
+              {targetSummary.length ? targetSummary : 'No contracts selected'}
+            </Text>
+          </View>
+
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Tokens</Text>
+            <Text style={styles.summaryValue}>
+              {tokenSummaries.length
+                ? tokenSummaries.join(', ')
+                : transferOptions.erc20 && transferEnabled
+                ? 'ERC20 transfers enabled but no tokens selected'
+                : 'Not applicable'}
+            </Text>
+          </View>
+
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>ETH limits</Text>
+            <Text style={styles.summaryValue}>
+              {callPolicySettings.maxValuePerTx || '—'} per tx / {callPolicySettings.maxValuePerDay || '—'} per day
+            </Text>
+          </View>
+
+          <Text style={styles.summaryFootnote}>ETH uses 18 decimals; ERC20 limits respect token decimals.</Text>
         </View>
       )}
-  </View>
-);
+    </View>
+  );
+};

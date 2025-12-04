@@ -45,6 +45,8 @@ export default function InstallationProgressScreen() {
   }, [derivedKeyType]);
   const progressValue = globalState.progress ?? 0;
   const completedSteps = steps.filter((step) => progressValue >= step.threshold).length;
+  const firstIncompleteIndex = steps.findIndex((step) => progressValue < step.threshold);
+  const activeStepIndex = firstIncompleteIndex === -1 ? steps.length - 1 : firstIncompleteIndex;
 
   useEffect(() => {
     if (globalState.status?.step === 'completed') {
@@ -114,28 +116,31 @@ export default function InstallationProgressScreen() {
         </View>
 
         <View style={styles.card}>
-          <View style={styles.progressSteps}>
+          <View style={styles.stepTracker}>
             {steps.map((stepItem, idx) => {
               const stepNumber = idx + 1;
               const done = completedSteps >= stepNumber;
+              const active = idx === activeStepIndex;
               return (
-                <View key={stepItem.label} style={styles.progressStep}>
+                <View key={stepItem.label} style={styles.stepItem}>
                   <View
                     style={[
-                      styles.progressStepIcon,
-                      done ? styles.progressStepCompleted : styles.progressStepPending,
+                      styles.stepCircle,
+                      done && styles.stepCircleDone,
+                      active && !done && styles.stepCircleActive,
                     ]}
                   >
                     {done ? (
-                      <IconSymbol name="checkmark" size={18} color="#FFFFFF" />
+                      <IconSymbol name="checkmark" size={16} color="#0D1117" />
                     ) : (
-                      <Text style={styles.progressStepNumber}>{stepNumber}</Text>
+                      <Text style={[styles.stepIndex, active && styles.stepIndexActive]}>{stepNumber}</Text>
                     )}
                   </View>
                   <Text
                     style={[
-                      styles.progressStepText,
-                      done ? styles.progressStepTextCompleted : styles.progressStepTextPending,
+                      styles.stepLabel,
+                      done && styles.stepLabelDone,
+                      active && !done && styles.stepLabelActive,
                     ]}
                   >
                     {stepItem.label}
@@ -269,47 +274,54 @@ const styles = StyleSheet.create({
     borderColor: '#242433',
     gap: 20,
   },
-  progressSteps: {
+  stepTracker: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '100%',
     gap: 16,
   },
-  progressStep: {
+  stepItem: {
     alignItems: 'center',
-    gap: 12,
     flex: 1,
+    gap: 10,
   },
-  progressStepIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  stepCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: '#2F3242',
+    backgroundColor: '#141723',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  progressStepCompleted: {
-    backgroundColor: '#10B981',
+  stepCircleDone: {
+    backgroundColor: '#39B981',
+    borderColor: '#39B981',
   },
-  progressStepPending: {
-    backgroundColor: '#333333',
-    borderWidth: 2,
-    borderColor: '#666666',
+  stepCircleActive: {
+    borderColor: '#8B5CF6',
   },
-  progressStepNumber: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+  stepIndex: {
+    color: '#6B7280',
+    fontSize: 16,
+    fontWeight: '700',
   },
-  progressStepText: {
-    fontSize: 14,
-    fontWeight: '500',
+  stepIndexActive: {
+    color: '#8B5CF6',
+  },
+  stepLabel: {
+    fontSize: 9,
     textAlign: 'center',
+    color: '#6B7280',
   },
-  progressStepTextCompleted: {
-    color: '#10B981',
+  stepLabelDone: {
+    color: '#39B981',
+    fontWeight: '600',
   },
-  progressStepTextPending: {
-    color: '#666666',
+  stepLabelActive: {
+    color: '#E5E7EB',
+    fontWeight: '400',
   },
   progressBarContainer: {
     width: '100%',

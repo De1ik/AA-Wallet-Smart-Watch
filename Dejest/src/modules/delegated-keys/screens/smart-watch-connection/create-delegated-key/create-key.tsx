@@ -35,10 +35,7 @@ import { transactionReviewState, InstallReviewPayload } from '@/services/storage
 
 const BLOCKCHAIN_LOADER_FRAMES = ['.', '..', '...', ''];
 const BLOCKCHAIN_STATUS_MESSAGES = [
-  'Creating on Blockchain',
-  'Signing transactions bundle',
-  'Waiting for relayer ack',
-  'Finalizing user operation',
+  'Loading',
 ];
 
 const snapshotCallPolicySettings = (settings: CallPolicySettings): CallPolicySettings =>
@@ -59,24 +56,24 @@ export default function CreateDelegatedKeyScreen() {
   const { wallet } = useWallet();
   const { showError, showSuccess, showInfo } = useNotifications();
 
-  useEffect(() => {
-    if (isConnecting && generatedKeyPair) {
-      setBlockchainStatusIndex(0);
-      const frameInterval = setInterval(() => {
-        setBlockchainLoaderFrame((prev) => (prev + 1) % BLOCKCHAIN_LOADER_FRAMES.length);
-      }, 450);
-      const statusInterval = setInterval(() => {
-        setBlockchainStatusIndex((prev) => (prev + 1) % BLOCKCHAIN_STATUS_MESSAGES.length);
-      }, 1400);
-      return () => {
-        clearInterval(frameInterval);
-        clearInterval(statusInterval);
-      };
-    }
+  // useEffect(() => {
+  //   if (isConnecting && generatedKeyPair) {
+  //     setBlockchainStatusIndex(0);
+  //     const frameInterval = setInterval(() => {
+  //       setBlockchainLoaderFrame((prev) => (prev + 1) % BLOCKCHAIN_LOADER_FRAMES.length);
+  //     }, 450);
+  //     const statusInterval = setInterval(() => {
+  //       setBlockchainStatusIndex((prev) => (prev + 1) % BLOCKCHAIN_STATUS_MESSAGES.length);
+  //     }, 1400);
+  //     return () => {
+  //       clearInterval(frameInterval);
+  //       clearInterval(statusInterval);
+  //     };
+  //   }
 
-    setBlockchainLoaderFrame(0);
-    setBlockchainStatusIndex(0);
-  }, [isConnecting, generatedKeyPair]);
+  //   setBlockchainLoaderFrame(0);
+  //   setBlockchainStatusIndex(0);
+  // }, [isConnecting, generatedKeyPair]);
 
   const generatePermissions = (delegatedKey: string) =>
     generateCallPolicyPermissions(
@@ -874,14 +871,12 @@ export default function CreateDelegatedKeyScreen() {
                 generatedKeyPair ? (
                   <>
                     <ActivityIndicator size="small" color="#FFFFFF" />
-                    <Text style={styles.createButtonText}>
-                      {`${BLOCKCHAIN_STATUS_MESSAGES[blockchainStatusIndex]}${BLOCKCHAIN_LOADER_FRAMES[blockchainLoaderFrame]}`}
-                    </Text>
+                    <Text style={styles.createButtonText}>Loading</Text>
                   </>
                 ) : (
                   <>
-                    <IconSymbol name="arrow.clockwise" size={20} color="#FFFFFF" />
-                    <Text style={styles.createButtonText}>Requesting Keys from Watch...</Text>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.createButtonText}>Connect with smartwatch</Text>
                   </>
                 )
               ) : !isWatchConnected ? (
