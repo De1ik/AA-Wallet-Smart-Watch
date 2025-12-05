@@ -135,12 +135,24 @@ async function prepareDelegatedKeyInstallationData(
       const rootNonceBefore = await getRootCurrentNonce(kernelAddress);
       console.log(`[Installation ${installationId}] Root nonce before install: ${rootNonceBefore}`);
 
-      const { unpacked, packed, userOpHash, permissionId: permId, vId: vid } = await buildInstallPermissionUoUnsigned(
+      const {
+        unpacked,
+        packed,
+        userOpHash,
+        permissionId: permId,
+        vId: vid,
+        estimatedCostWei,
+      } = await buildInstallPermissionUoUnsigned(
         kernelAddress,
         delegatedEOA as `0x${string}`
       );
 
-      unsignedPermissionPolicyData = { unpacked, packed, userOpHash };
+      unsignedPermissionPolicyData = {
+        unpacked,
+        packed,
+        userOpHash,
+        estimatedFeeWei: estimatedCostWei?.toString(),
+      };
 
       permissionId = permId;
       vId = vid;
@@ -151,12 +163,24 @@ async function prepareDelegatedKeyInstallationData(
 
       logCallPolicySummary(delegatedEOA, callPolicyPermissions);
 
-      const { unpacked, packed, userOpHash, permissionId: permId, vId: vid } = await buildInstallCallPolicyUoUnsigned(
+      const {
+        unpacked,
+        packed,
+        userOpHash,
+        permissionId: permId,
+        vId: vid,
+        estimatedCostWei,
+      } = await buildInstallCallPolicyUoUnsigned(
         kernelAddress,
         delegatedEOA as `0x${string}`,
         callPolicyPermissions
       );
-      unsignedPermissionPolicyData = { unpacked, packed, userOpHash };
+      unsignedPermissionPolicyData = {
+        unpacked,
+        packed,
+        userOpHash,
+        estimatedFeeWei: estimatedCostWei?.toString(),
+      };
       
       permissionId = permId;
       vId = vid;
@@ -166,13 +190,24 @@ async function prepareDelegatedKeyInstallationData(
 
 
     // grant access to vId
-    unsignedGrantAccessData = await buildGrantAccessUoUnsigned(
+    const {
+      unpacked: grantUnpacked,
+      packed: grantPacked,
+      userOpHash: grantUserOpHash,
+      estimatedCostWei: grantCost,
+    } = await buildGrantAccessUoUnsigned(
       kernelAddress,
       vId as `0x${string}`,
       EXECUTE_SELECTOR,
       true,
       index
     );
+    unsignedGrantAccessData = {
+      unpacked: grantUnpacked,
+      packed: grantPacked,
+      userOpHash: grantUserOpHash,
+      estimatedFeeWei: grantCost?.toString(),
+    };
   
     index++;
 
@@ -183,13 +218,24 @@ async function prepareDelegatedKeyInstallationData(
         const recipientList = recipients;
         const allowedList = recipients.map(() => true);
 
-        unsignedRecipientListData = await buildSetRecipientAllowedUoUnsigned(
+        const {
+          unpacked: recipientUnpacked,
+          packed: recipientPacked,
+          userOpHash: recipientHash,
+          estimatedCostWei: recipientCost,
+        } = await buildSetRecipientAllowedUoUnsigned(
           permissionId as `0x${string}`,
           kernelAddress,
           recipientList,
           allowedList,
           index
         );
+        unsignedRecipientListData = {
+          unpacked: recipientUnpacked,
+          packed: recipientPacked,
+          userOpHash: recipientHash,
+          estimatedFeeWei: recipientCost?.toString(),
+        };
 
         index++;
       }
@@ -202,7 +248,12 @@ async function prepareDelegatedKeyInstallationData(
         const txLimits = tokenLimits.map(t => t.txLimit);
         const dailyLimits = tokenLimits.map(t => t.dailyLimit);
 
-        unsignedTokenListData = await buildSetTokenLimitUoUnsigned(
+        const {
+          unpacked: tokenUnpacked,
+          packed: tokenPacked,
+          userOpHash: tokenHash,
+          estimatedCostWei: tokenCost,
+        } = await buildSetTokenLimitUoUnsigned(
           permissionId as `0x${string}`,
           kernelAddress,
           tokens,
@@ -211,6 +262,12 @@ async function prepareDelegatedKeyInstallationData(
           dailyLimits,
           index
         );
+        unsignedTokenListData = {
+          unpacked: tokenUnpacked,
+          packed: tokenPacked,
+          userOpHash: tokenHash,
+          estimatedFeeWei: tokenCost?.toString(),
+        };
 
         index++;
       }

@@ -33,7 +33,7 @@ export async function handleExecuteDelegatedKeyCreation(
         sendStatus({
             step: "installing",
             message: "Installing permission...",
-            progress: 10,
+            progress: 0,
         });
 
         debugLog(`[Installation ${installationId}] signedPermissionPolicyData`, data.signedPermissionPolicyData.unpacked);
@@ -48,7 +48,7 @@ export async function handleExecuteDelegatedKeyCreation(
         sendStatus({
             step: "installing",
             message: "Grant access...",
-            progress: 40,
+            progress: 25,
         });
 
         debugLog(`[Installation ${installationId}] signedGrantAccessData`, data.signedGrantAccessData.unpacked);
@@ -66,7 +66,7 @@ export async function handleExecuteDelegatedKeyCreation(
           sendStatus({
               step: "installing",
               message: "Recipient restrictions installation...",
-              progress: 70,
+              progress: 50,
           });
 
           debugLog(`[Installation ${installationId}] signedRecipientListData`, data.signedRecipientListData!.unpacked);
@@ -80,7 +80,7 @@ export async function handleExecuteDelegatedKeyCreation(
           sendStatus({
               step: "installing",
               message: "Install allowed tokens...",
-              progress: 85,
+              progress: 75,
           });
 
           debugLog(`[Installation ${installationId}] signedTokenListData`, data.signedTokenListData!.unpacked);

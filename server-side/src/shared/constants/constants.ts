@@ -1,5 +1,6 @@
 import { Address } from "viem";
 import { sepolia } from "viem/chains";
+import 'dotenv/config';
 
 // RPC URLs
 export const ZERO_DEV_RPC = `https://rpc.zerodev.app/api/v3/${process.env.ZERODEV_API_KEY}/chain/11155111`;

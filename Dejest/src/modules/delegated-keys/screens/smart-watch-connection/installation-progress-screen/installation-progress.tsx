@@ -1,13 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
-import { useInstallationProgress } from './useInstallationProgress';
-import { useEffect } from 'react';
 import { PermissionPolicyType } from '@/domain/types';
+import { useStepAnimation } from './useStepAnimation';
 
-const { width } = Dimensions.get('window');
+const progressWidth = Dimensions.get('window').width - 80;
 
 type InstallationProgressParams = {
   deviceId?: string;
@@ -23,55 +22,46 @@ export default function InstallationProgressScreen() {
   const keyType = Array.isArray(params.keyType) ? params.keyType[0] : params.keyType;
   const originParam = Array.isArray(params.origin) ? params.origin[0] : params.origin;
   const cameFromList = originParam === 'list';
-  const { globalState, progressAnimation } = useInstallationProgress();
   const parsedKeyType = typeof keyType === 'string' ? Number(keyType) : undefined;
   const fallbackKeyType = Number.isFinite(parsedKeyType)
     ? (parsedKeyType as PermissionPolicyType)
     : PermissionPolicyType.CALL_POLICY;
-  const derivedKeyType = globalState.keyType ?? fallbackKeyType;
-  const steps = useMemo(() => {
-    const base = [
-      { label: 'Install permission validation', threshold: 10 },
-      { label: 'Grant delegated execution', threshold: 40 },
-    ];
-    if (derivedKeyType === PermissionPolicyType.CALL_POLICY) {
-      base.push(
-        { label: 'Apply recipient restrictions', threshold: 70 },
-        { label: 'Configure token allowances', threshold: 85 }
-      );
-    }
-    base.push({ label: 'Complete', threshold: 100 });
-    return base;
-  }, [derivedKeyType]);
-  const progressValue = globalState.progress ?? 0;
-  const completedSteps = steps.filter((step) => progressValue >= step.threshold).length;
-  const firstIncompleteIndex = steps.findIndex((step) => progressValue < step.threshold);
-  const activeStepIndex = firstIncompleteIndex === -1 ? steps.length - 1 : firstIncompleteIndex;
+
+  const {
+    globalState,
+    progressAnimation,
+    steps,
+    progressValue,
+    completedSteps,
+    activeStepIndex,
+    trackerOpacity,
+    completeOpacity,
+  } = useStepAnimation(fallbackKeyType);
 
   useEffect(() => {
     if (globalState.status?.step === 'completed') {
       const timeout = setTimeout(() => {
-        router.replace('/settings/smart-watch-connection/delegated-keys-list/smart-watch');
+        router.back();
       }, 1200);
       return () => clearTimeout(timeout);
     }
     if (globalState.status?.step === 'failed') {
-      const timeout = setTimeout(() => router.back(), 3000);
+      const timeout = setTimeout(
+        // () => router.replace('/settings/smart-watch-connection/delegated-keys-list/smart-watch'),
+        () => router.back(),
+        3000
+      );
       return () => clearTimeout(timeout);
     }
   }, [globalState.status]);
 
   const handleBack = () => {
-    if (cameFromList) {
-      router.back();
-      return;
-    }
-    router.replace('/settings/smart-watch-connection/delegated-keys-list/smart-watch');
+    router.back();
   };
 
   const progressBarWidth = progressAnimation.interpolate({
     inputRange: [0, 100],
-    outputRange: [0, width - 80],
+    outputRange: [0, progressWidth],
     extrapolate: 'clamp',
   });
 
@@ -115,8 +105,8 @@ export default function InstallationProgressScreen() {
           </View>
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.stepTracker}>
+        <View style={[styles.card, progressValue >= 100 && styles.cardComplete]}>
+          <Animated.View style={[styles.stepTracker, { opacity: trackerOpacity, transform: [{ scale: trackerOpacity.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] }) }] }]}>
             {steps.map((stepItem, idx) => {
               const stepNumber = idx + 1;
               const done = completedSteps >= stepNumber;
@@ -148,19 +138,28 @@ export default function InstallationProgressScreen() {
                 </View>
               );
             })}
-          </View>
-
-          <View style={styles.progressBarContainer}>
-            <View style={styles.progressBarBackground}>
-              <Animated.View style={[styles.progressBarFill, { width: progressBarWidth }]} />
+          </Animated.View>
+          <Animated.View style={[styles.completeWrapper, { opacity: completeOpacity, transform: [{ scale: completeOpacity.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }] }]}>
+            <View style={styles.completeCircle}>
+              <Text style={styles.completeText}>Complete</Text>
             </View>
-            <Text style={styles.progressPercent}>{Math.round(globalState.status?.progress ?? 0)}%</Text>
-          </View>
+          </Animated.View>
 
-          <View style={styles.currentStepContainer}>
-            <Text style={styles.currentStepLabel}>Current step</Text>
-            <Text style={styles.currentStepText}>{globalState.currentStep}</Text>
-          </View>
+          {progressValue < 100 && (
+            <>
+              <View style={styles.progressBarContainer}>
+                <View style={styles.progressBarBackground}>
+                  <Animated.View style={[styles.progressBarFill, { width: progressBarWidth }]} />
+                </View>
+                <Text style={styles.progressPercent}>{Math.round(globalState.status?.progress ?? 0)}%</Text>
+              </View>
+
+              <View style={styles.currentStepContainer}>
+                <Text style={styles.currentStepLabel}>Current step</Text>
+                <Text style={styles.currentStepText}>{globalState.currentStep}</Text>
+              </View>
+            </>
+          )}
         </View>
 
         {globalState.status?.step === 'failed' && (
@@ -266,13 +265,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   card: {
-    marginHorizontal: 20,
-    padding: 16,
-    borderRadius: 16,
+    marginHorizontal: 16,
+    padding: 20,
+    borderRadius: 20,
     backgroundColor: '#111118',
-    borderWidth: 1,
-    borderColor: '#242433',
-    gap: 20,
+    borderWidth: 0,
+    gap: 24,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  cardComplete: {
+    paddingVertical: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 0,
   },
   stepTracker: {
     flexDirection: 'row',
@@ -321,7 +327,31 @@ const styles = StyleSheet.create({
   },
   stepLabelActive: {
     color: '#E5E7EB',
-    fontWeight: '400',
+    fontWeight: '500',
+  },
+  completeWrapper: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none',
+  },
+  completeCircle: {
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: '#39B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#39B981',
+    shadowOpacity: 0.4,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 12 },
+  },
+  completeText: {
+    color: '#0D1117',
+    fontSize: 26,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   progressBarContainer: {
     width: '100%',

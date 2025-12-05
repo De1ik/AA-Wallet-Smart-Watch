@@ -42,6 +42,9 @@ export async function handleCallPolicyInfo(body: unknown): Result<any> {
     }
 
     const { owner, delegatedKey } = parsed.data;
+
+    debugLog("Received data:", parsed.data)
+
     const policyId = getPermissionId(owner, delegatedKey);
     const info = await getDelegatedKeyInfo(owner, policyId, delegatedKey);
 

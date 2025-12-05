@@ -10,7 +10,7 @@ The `server-side/src/routes` folder hosts every HTTP surface that powers the sma
 | `wallet.accountRoutes.ts` | Balance lookup, transaction history, and kernel-owned transfers. | `GET /wallet/balances`, `GET /wallet/transactions`, `POST /wallet/send` |
 | `wallet.entryPointRoutes.ts` | EntryPoint deposit tooling and prefund snapshots. | `GET /wallet/entrypoint/status`, `POST /wallet/entrypoint/deposit` |
 | `wallet.userOpRoutes.ts` | Two-step user-operation flow used by the watch (prepare → broadcast). | `POST /wallet/userOp/prepare`, `POST /wallet/userOp/broadcast` |
-| `wallet.delegatedRoutes.ts` | Full delegated-key installation lifecycle plus revocation. | `POST /wallet/delegated/create`, `POST /wallet/revoke` |
+| `wallet.delegatedRoutes.ts` | Full delegated-key installation lifecycle plus revocation. | `POST /wallet/delegated/install/prepare-data`, `/wallet/delegated/install/execute`, `/wallet/delegated/revoke/prepare-data`, `/wallet/delegated/revoke/execute` |
 | `wallet.callPolicyRoutes.ts` | Fetching and maintaining call-policy permissions/daily usage. | `POST /wallet/callpolicy/fetch`, `/callpolicy/regenerate`, `/callpolicy/all-permissions-with-usage` |
 
 Supporting modules (`wallet.constants.ts`, `wallet.errors.ts`, `wallet.prefund.ts`, and `wallet.transactions.ts`) provide shared helpers and do not register endpoints directly.
@@ -57,20 +57,21 @@ Builds a deposit user operation via `buildDepositUserOp`, submits it through the
 
 ## Delegated Key Lifecycle (`wallet.delegatedRoutes.ts`)
 
-### `POST /wallet/delegated/create`
-*Payload:* `{ delegatedEOA, keyType: "sudo" | "restricted" | "callpolicy", clientId?, permissions? }`.  
-- Validates the delegated EOA and requested key type.  
-- For `callpolicy` keys, enforces that a non-empty permissions array is provided and well-formed.  
-- Runs `checkPrefundSimple`; if prefund is missing, aborts early.  
-- Kicks off `performDelegatedKeyInstallation`, which:
-  1. Installs either the sudo policy or call policy (with custom restrictions).  
-  2. Enables and/or grants the `execute` selector depending on key type.  
-  3. Streams `InstallationStatus` updates (installing → granting → completed/failed) over WebSocket via `wsService.broadcastToClient(clientId, status)`.  
-The HTTP response simply acknowledges `{ installationId }` while the heavy work continues asynchronously.
+### `POST /wallet/delegated/install/prepare-data`
+*Payload:* `{ delegatedAddress, keyType, clientId, permissions?, callPolicyConfig?, kernelAddress }`.  
+Validates the delegated key request, ensures prefund, normalizes call-policy payloads, and returns `{ installationId, data }` where `data` holds the unsigned user-operation batches (install policy, grant access, optional tokens/recipients). The client signs each block locally.
 
-### `POST /wallet/revoke`
-*Payload:* `{ delegatedEOA }`.  
-Performs the inverse of installation: validates the address, ensures prefund, builds an uninstall user operation (with retry/backoff on rate limits), sends it, and returns `{ success, txHash }`. Friendly error messages are emitted if prefund checks or bundler submissions fail.
+### `POST /wallet/delegated/install/execute`
+*Payload:* `{ data: { signedPermissionPolicyData, ... }, clientId, kernelAddress, installationId }`.  
+Takes the signed user operations from the previous step, submits them sequentially, and streams progress updates via WebSocket so the watch UI can animate the installation state.
+
+### `POST /wallet/delegated/revoke/prepare-data`
+*Payload:* `{ delegatedEOA, kernelAddress }`.  
+Runs the same prefund guard, builds the uninstall user operation, and responds with `{ revocationId, data }` so the client can validate/sign locally.
+
+### `POST /wallet/delegated/revoke/execute`
+*Payload:* `{ revocationId, delegatedEOA, kernelAddress, data: { signedRevokeData } }`.  
+Broadcasts the signed uninstall operation, waits for the kernel nonce to advance, and returns `{ success, revocationId, txHash }` once the delegated key has been revoked.
 
 ---
 

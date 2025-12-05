@@ -1,6 +1,6 @@
 import { Address } from "viem";
-import { badRequest, ErrorResponse, HttpResult, ok } from "../../../shared/http/apiResponse";
-import { checkPrefundSafe } from "../../../utils/native/helpers";
+import { badRequest, ErrorResponse, HttpResult, internalError, ok } from "../../../shared/http/apiResponse";
+import { checkPrefundSafe, generateInstallationId } from "../../../utils/native/helpers";
 import { RevokePrepareSuccess } from "../../../utils/native/types";
 import { buildUninstallPermissionUoUnsigned } from "../../../utils/native/userOps";
 import { revokePrepareSchema } from "../schema";
@@ -16,26 +16,33 @@ export async function handlePrepareDelegatedKeyRevoke(input: unknown): Promise<H
     }
 
     const { delegatedEOA, kernelAddress } = parsed.data;
+    const revocationId = generateInstallationId();
 
     debugLog(`[revoke] -> Revoking delegated key: ${delegatedEOA}`);
 
     // check prefund
-    const prefund = await checkPrefundSafe(kernelAddress as Address, "[revoke]");
+    const prefund = await checkPrefundSafe(kernelAddress as Address, revocationId);
     if (prefund.error) return badRequest(prefund.message);
 
     // build data for signing
-    const result = await buildUninstallPermissionUoUnsigned(kernelAddress as Address, delegatedEOA as Address);
+    const { estimatedCostWei, ...prepareData } = await buildUninstallPermissionUoUnsigned(
+      kernelAddress as Address,
+      delegatedEOA as Address
+    );
+
+    const data = {
+      ...prepareData,
+      estimatedFeeWei: estimatedCostWei?.toString(),
+    };
 
     return ok({
       success: true,
-      data: result,
+      revocationId,
+      data,
+      estimatedFeeWei: estimatedCostWei?.toString(),
       message: "Data for signing to revoke delegated key prepared successfully",
     });
   } catch (err: any) {
-    return ok({
-      success: false,
-      message: "Data for signing to revoke delegated key preparation failed",
-      error: err.message,
-    });
+    return internalError("Failed to prepare delegated key revocation", err);
   }
 }

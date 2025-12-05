@@ -1,6 +1,6 @@
 import { Address } from "viem";
 import { RevokeExecuteSuccess } from "../../../utils/native/types";
-import { badRequest, ErrorResponse, HttpResult, ok } from "../../../shared/http/apiResponse";
+import { badRequest, ErrorResponse, HttpResult, internalError, ok } from "../../../shared/http/apiResponse";
 import { executeUserOp } from "../helper";
 import { revokeExecuteSchema } from "../schema";
 
@@ -16,21 +16,23 @@ export async function handleExecuteDelegatedKeyRevoke(
             return badRequest("Validation error", parsed.error.issues[0].message);
         }
 
-        const { data, kernelAddress } = parsed.data;
+        const { data, kernelAddress, revocationId } = parsed.data;
+        const signedRevokeData = data?.signedRevokeData;
+        if (!signedRevokeData) {
+            return badRequest("signedRevokeData is required");
+        }
 
         // send user operation 
-        const { isUpdated, txHash } = await executeUserOp(data.unpacked, kernelAddress as Address);
+        const { txHash } = await executeUserOp(signedRevokeData.unpacked, kernelAddress as Address);
 
         return ok({
             success: true,
-            data: txHash,
-            message: "Data for signing to revoke delegated key prepared successfully",
+            revocationId,
+            txHash,
+            message: "Delegated key revoked successfully",
         });
     } catch (err: any) {
-        return ok({
-            success: false,
-            message: "Installation failed",
-        });
+        return internalError("Failed to execute delegated key revocation", err);
     }
 
 }

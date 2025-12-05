@@ -268,8 +268,8 @@ export default function TransactionReviewScreen() {
     if (context.kind === 'delegated-installation') {
       const installPayload = context.payload;
       transactionReviewState.clear();
-
-      router.replace({
+      router.dismiss(2)
+      router.push({
         pathname: '/settings/smart-watch-connection/installation-progress-screen/installation-progress',
         params: {
           deviceId: installPayload.deviceId,

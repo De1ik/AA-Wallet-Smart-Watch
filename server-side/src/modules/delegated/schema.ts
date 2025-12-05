@@ -31,7 +31,10 @@ export const revokePrepareSchema = z.object({
 });
 
 export const revokeExecuteSchema = z.object({
-  data: z.any(),
+  revocationId: z.string(),
   delegatedEOA: addressSchema,
   kernelAddress: addressSchema,
+  data: z.object({
+    signedRevokeData: z.any(),
+  }),
 });
