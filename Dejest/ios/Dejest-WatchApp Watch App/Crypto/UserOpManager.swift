@@ -2,7 +2,16 @@ import Foundation
 import Web3
 
 struct PrepareUserOpResponse: Codable {
+    struct Echo: Codable {
+        let permissionId: String?
+        let to: String
+        let amountWei: String
+        let data: String?
+        let tokenAddress: String?
+    }
+    
     let userOpHash: String
+    let echo: Echo?
 }
 
 class UserOpManager {
