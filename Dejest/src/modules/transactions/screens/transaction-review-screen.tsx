@@ -11,6 +11,7 @@ import {
   InstallReviewPayload,
   RevocationReviewPayload,
   TransactionReviewContext,
+  AccountTransactionReviewPayload,
 } from '@/services/storage/transactionReviewState';
 import { useNotifications } from '@/shared/contexts/NotificationContext';
 import { PermissionPolicyType, PrepareDataForSigning, SignedDataForDelegateInstallation } from '@/domain/types';
@@ -21,6 +22,7 @@ import { removeDelegatedKey, removeDelegatedKeyByAddress, updateDelegatedKey } f
 import { installationState } from '@/services/storage/installationState';
 import { wsClient } from '@/services/api/websocketClient';
 import { COLORS } from '@/shared/constants/colors';
+import { useWallet } from '@/modules/account/state/WalletContext';
 
 const estimateWeiFromPrepareData = (data?: PrepareDataForSigning) => {
   if (!data) return undefined;
@@ -63,7 +65,8 @@ const formatWeiToEth = (value?: bigint) => {
 
 export default function TransactionReviewScreen() {
   const context = useReviewContext();
-  const { showError, showInfo } = useNotifications();
+  const { showError, showInfo, showSuccess } = useNotifications();
+  const { refreshCryptoData } = useWallet();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -107,20 +110,33 @@ export default function TransactionReviewScreen() {
       return base;
     }
 
-    const payload = context.payload;
-    const estimatedWei = payload.gasEstimateWei ? (() => {
-      try {
-        return BigInt(payload.gasEstimateWei);
-      } catch {
-        return undefined;
-      }
-    })() : undefined;
+    if (context.kind === 'delegated-revocation') {
+      const payload = context.payload;
+      const estimatedWei = payload.gasEstimateWei
+        ? (() => {
+            try {
+              return BigInt(payload.gasEstimateWei);
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined;
 
+      return [
+        {
+          label: 'Revoke delegated key',
+          userOpHash: payload.unsignedRevokeData.userOpHash,
+          estimatedWei,
+        },
+      ];
+    }
+
+    const payload = context.payload;
     return [
       {
-        label: 'Revoke delegated key',
-        userOpHash: payload.unsignedRevokeData.userOpHash,
-        estimatedWei,
+        label: 'Send transaction',
+        userOpHash: payload.unsignedUserOp.userOpHash,
+        estimatedWei: estimateWeiFromPrepareData(payload.unsignedUserOp),
       },
     ];
   }, [context]);
@@ -134,10 +150,17 @@ export default function TransactionReviewScreen() {
   }, [operations]);
 
   const isInstallation = context?.kind === 'delegated-installation';
-  const confirmLabel = isInstallation ? 'Sign & Install' : 'Sign & Revoke';
-  const warningText = isInstallation
-    ? 'You will sign and broadcast all listed operations. Review every detail carefully to ensure the server-provided hashes match your expected configuration.'
-    : 'You will sign and broadcast this transaction. Make sure the server-provided hash matches your expectation before continuing.';
+  const isRevocation = context?.kind === 'delegated-revocation';
+  const confirmLabel = isInstallation ? 'Sign & Install' : isRevocation ? 'Sign & Revoke' : 'Sign & Send';
+  const warningText = (() => {
+    if (isInstallation) {
+      return 'You will sign and broadcast all listed operations. Review every detail carefully to ensure the server-provided hashes match your expected configuration.';
+    }
+    if (isRevocation) {
+      return 'You will sign and broadcast this transaction. Make sure the server-provided hash matches your expectation before continuing.';
+    }
+    return 'You are about to sign and broadcast this transfer. Double-check the destination, amount, and hash before approving.';
+  })();
 
   const markInstallationFailed = async (deviceId: string, errorMessage: string) => {
     try {
@@ -261,6 +284,20 @@ export default function TransactionReviewScreen() {
     return executeResult.txHash;
   };
 
+  const executeAccountTransaction = async (payload: AccountTransactionReviewPayload) => {
+    const signedTransfer = (await processUnsigned(
+      payload.unsignedUserOp,
+      'unsignedTransferData'
+    )) as SignedDataForDelegateInstallation;
+
+    if (!signedTransfer) {
+      throw new Error('Failed to sign transaction');
+    }
+
+    const result = await apiClient.broadcastUserOperation(signedTransfer);
+    return result.txHash;
+  };
+
   const handleConfirm = async () => {
     if (!context) return;
     setIsSubmitting(true);
@@ -292,16 +329,30 @@ export default function TransactionReviewScreen() {
       } finally {
         setIsSubmitting(false);
       }
-    } else {
+    } else if (context.kind === 'delegated-revocation') {
       try {
         const txHash = await executeRevocation(context.payload);
         transactionReviewState.clear();
         const shortHash = `${txHash.slice(0, 10)}...${txHash.slice(-6)}`;
-        showInfo(`Delegated key revoked\nTx: ${shortHash}`, { title: 'Revocation submitted' });
+        showSuccess(`Delegated key revoked\nTx: ${shortHash}`, { title: 'Revocation submitted' });
         router.back();
       } catch (error: any) {
         console.error('Error executing revocation:', error);
         showError(error?.message || 'Failed to revoke delegated key', { title: 'Revocation failed' });
+      } finally {
+        setIsSubmitting(false);
+      }
+    } else {
+      try {
+        const txHash = await executeAccountTransaction(context.payload);
+        transactionReviewState.clear();
+        const shortHash = `${txHash.slice(0, 8)}...${txHash.slice(-6)}`;
+        showSuccess(`Transfer submitted\nTx: ${shortHash}`, { title: 'Transaction sent' });
+        await refreshCryptoData();
+        router.back();
+      } catch (error: any) {
+        console.error('Error executing transfer:', error);
+        showError(error?.message || 'Failed to send transaction', { title: 'Transaction failed' });
       } finally {
         setIsSubmitting(false);
       }
@@ -314,9 +365,12 @@ export default function TransactionReviewScreen() {
       await markInstallationFailed(context.payload.deviceId, 'Installation cancelled by user before signing');
       transactionReviewState.clear();
       showInfo('Installation cancelled', { title: 'Cancelled' });
-    } else {
+    } else if (context.kind === 'delegated-revocation') {
       transactionReviewState.clear();
       showInfo('Revocation cancelled', { title: 'Cancelled' });
+    } else {
+      transactionReviewState.clear();
+      showInfo('Transfer cancelled', { title: 'Cancelled' });
     }
     router.back();
   };
@@ -353,25 +407,58 @@ export default function TransactionReviewScreen() {
       );
     }
 
+    if (context.kind === 'delegated-revocation') {
+      const payload = context.payload;
+      return (
+        <View style={reviewScreenStyles.card}>
+          <Text style={reviewScreenStyles.cardHeading}>Revocation Details</Text>
+          <View style={reviewScreenStyles.cardRow}>
+            <Text style={reviewScreenStyles.cardLabel}>Device</Text>
+            <Text style={reviewScreenStyles.cardValue}>{payload.deviceName || 'Unknown device'}</Text>
+          </View>
+          <View style={reviewScreenStyles.cardRow}>
+            <Text style={reviewScreenStyles.cardLabel}>Delegated Address</Text>
+            <Text style={reviewScreenStyles.cardValueMono}>{payload.delegatedAddress}</Text>
+          </View>
+          <View style={reviewScreenStyles.cardRow}>
+            <Text style={reviewScreenStyles.cardLabel}>Kernel</Text>
+            <Text style={reviewScreenStyles.cardValueMono}>{payload.kernelAddress}</Text>
+          </View>
+          <View style={reviewScreenStyles.cardRow}>
+            <Text style={reviewScreenStyles.cardLabel}>Revocation ID</Text>
+            <Text style={reviewScreenStyles.cardValueMono}>{payload.revocationId}</Text>
+          </View>
+        </View>
+      );
+    }
+
     const payload = context.payload;
+    const formattedAmount = (() => {
+      try {
+        return formatUnits(BigInt(payload.amountWei), payload.decimals);
+      } catch {
+        return payload.amountInput;
+      }
+    })();
+
     return (
       <View style={reviewScreenStyles.card}>
-        <Text style={reviewScreenStyles.cardHeading}>Revocation Details</Text>
+        <Text style={reviewScreenStyles.cardHeading}>Transfer details</Text>
         <View style={reviewScreenStyles.cardRow}>
-          <Text style={reviewScreenStyles.cardLabel}>Device</Text>
-          <Text style={reviewScreenStyles.cardValue}>{payload.deviceName || 'Unknown device'}</Text>
+          <Text style={reviewScreenStyles.cardLabel}>Token</Text>
+          <Text style={reviewScreenStyles.cardValue}>{payload.tokenSymbol}</Text>
         </View>
         <View style={reviewScreenStyles.cardRow}>
-          <Text style={reviewScreenStyles.cardLabel}>Delegated Address</Text>
-          <Text style={reviewScreenStyles.cardValueMono}>{payload.delegatedAddress}</Text>
+          <Text style={reviewScreenStyles.cardLabel}>Amount</Text>
+          <Text style={reviewScreenStyles.cardValue}>{formattedAmount}</Text>
         </View>
         <View style={reviewScreenStyles.cardRow}>
-          <Text style={reviewScreenStyles.cardLabel}>Kernel</Text>
+          <Text style={reviewScreenStyles.cardLabel}>From (kernel)</Text>
           <Text style={reviewScreenStyles.cardValueMono}>{payload.kernelAddress}</Text>
         </View>
         <View style={reviewScreenStyles.cardRow}>
-          <Text style={reviewScreenStyles.cardLabel}>Revocation ID</Text>
-          <Text style={reviewScreenStyles.cardValueMono}>{payload.revocationId}</Text>
+          <Text style={reviewScreenStyles.cardLabel}>To</Text>
+          <Text style={reviewScreenStyles.cardValueMono}>{payload.recipient}</Text>
         </View>
       </View>
     );
@@ -444,7 +531,7 @@ export default function TransactionReviewScreen() {
             <IconSymbol name="chevron.left" size={20} color="#FFFFFF" />
           </TouchableOpacity>
           <Text style={reviewScreenStyles.title}>
-            {isInstallation ? 'Review Installation' : 'Review Transaction'}
+            {isInstallation ? 'Review Installation' : isRevocation ? 'Review Transaction' : 'Review Transfer'}
           </Text>
           <View style={reviewScreenStyles.placeholder} />
         </View>

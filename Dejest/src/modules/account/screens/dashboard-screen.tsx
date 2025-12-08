@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, RefreshControl, ActivityIndicator } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, RefreshControl, ActivityIndicator, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { useWallet } from '@/modules/account/state/WalletContext';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { TxType } from '@/domain/types';
+import TransactionDetailsModal from '@/modules/account/components/TransactionDetailsModal';
+import { useNotifications } from '@/shared/contexts/NotificationContext';
+
+import type { CryptoData } from '@/modules/account/state/WalletContext';
+
+const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
 
 export default function DashboardScreen() {
   const { cryptoData, wallet, refreshCryptoData } = useWallet();
@@ -13,6 +19,9 @@ export default function DashboardScreen() {
   const [balanceVisible, setBalanceVisible] = useState(true);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<CryptoData['transactions'][number] | null>(null);
+  const { showSuccess, showError, showInfo } = useNotifications();
+  const pullDistance = useRef(new Animated.Value(0)).current;
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -30,11 +39,33 @@ export default function DashboardScreen() {
       await Clipboard.setStringAsync(address);
       setCopiedAddress(address);
       setTimeout(() => setCopiedAddress(null), 2000);
-      Alert.alert('Copied!', `${type} address copied to clipboard`);
+      showInfo(`${type} address copied to clipboard`);
+      
     } catch (error) {
-      Alert.alert('Error', 'Failed to copy address');
+      showError('Failed to copy address');
     }
   };
+
+  const handleScroll = (event: any) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    if (offsetY < 0) {
+      pullDistance.setValue(Math.min(-offsetY, 120));
+    } else {
+      pullDistance.setValue(0);
+    }
+  };
+
+  const indicatorHeight = pullDistance.interpolate({
+    inputRange: [0, 120],
+    outputRange: [0, 100],
+    extrapolate: 'clamp',
+  });
+
+  const indicatorOpacity = pullDistance.interpolate({
+    inputRange: [0, 20, 60],
+    outputRange: [0, 0.3, 1],
+    extrapolate: 'clamp',
+  });
 
   if (!cryptoData || !wallet) {
     return (
@@ -82,16 +113,12 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Custom refresh indicator */}
-      {refreshing && (
-        <View style={styles.refreshIndicator}>
-          <ActivityIndicator size="small" color="#8B5CF6" />
-        </View>
-      )}
-      <ScrollView 
+      <AnimatedScrollView 
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -102,6 +129,9 @@ export default function DashboardScreen() {
           />
         }
       >
+        <Animated.View style={[styles.pullIndicator, { height: indicatorHeight, opacity: indicatorOpacity }]}>
+          <ActivityIndicator size="small" color="#8B5CF6" />
+        </Animated.View>
         {/* Header */}
         <View style={styles.header}>
           <View>
@@ -260,7 +290,12 @@ export default function DashboardScreen() {
           </View>
           
           {cryptoData.transactions.slice(0, 3).map((transaction) => (
-            <View key={transaction.id} style={styles.transactionItem}>
+            <TouchableOpacity
+              key={transaction.id}
+              style={styles.transactionItem}
+              activeOpacity={0.75}
+              onPress={() => setSelectedTransaction(transaction)}
+            >
               <View style={styles.transactionIcon}>
                 <IconSymbol 
                   name={transaction.type === TxType.RECEIVED ? "arrow.down.left" : "arrow.up.right"} 
@@ -293,10 +328,15 @@ export default function DashboardScreen() {
                   {transaction.type === TxType.RECEIVED ? '+' : '-'}{formatCurrency(transaction.value)}
                 </Text>
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
-      </ScrollView>
+      </AnimatedScrollView>
+      <TransactionDetailsModal
+        visible={selectedTransaction !== null}
+        transaction={selectedTransaction}
+        onClose={() => setSelectedTransaction(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -310,16 +350,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 20,
+    paddingBottom: 30,
   },
-  refreshIndicator: {
-    position: 'absolute',
-    top: 10,
-    left: 0,
-    right: 0,
+  pullIndicator: {
     alignItems: 'center',
-    zIndex: 1000,
-    paddingTop: 10,
+    justifyContent: 'center',
+    paddingVertical: 12,
   },
   loadingContainer: {
     flex: 1,

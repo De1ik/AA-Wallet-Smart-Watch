@@ -1,103 +1,147 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Modal, ActivityIndicator, Animated } from 'react-native';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  TextInput,
+  ScrollView,
+  Modal,
+  ActivityIndicator,
+  Animated,
+  Easing,
+  TouchableWithoutFeedback,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Clipboard from 'expo-clipboard';
+import { router } from 'expo-router';
+import { parseUnits, type Address } from 'viem';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { useWallet } from '@/modules/account/state/WalletContext';
 import { apiClient } from '@/services/api/apiClient';
+import { transactionReviewState } from '@/services/storage/transactionReviewState';
+import { useNotifications } from '@/shared/contexts/NotificationContext';
+import { SUPPORTED_TOKENS } from '@/shared/constants/appConstants';
+import type { TokenOption } from '@/modules/delegated-keys/services/delegatedKeys';
 
-// Token addresses on Sepolia
-const TOKEN_ADDRESSES: Record<string, { address: string; decimals: number }> = {
-  ETH: { address: '', decimals: 18 },
-  USDT: { address: '0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0', decimals: 6 },
-  USDC: { address: '0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8', decimals: 6 },
-  DAI: { address: '0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357', decimals: 18 },
-  WETH: { address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', decimals: 18 },
-  UNI: { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', decimals: 18 },
+const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
+
+const ETH_TOKEN: TokenOption = {
+  address: '',
+  symbol: 'ETH',
+  name: 'Ethereum',
+  decimals: 18,
+  color: '#627EEA',
 };
 
-// Token colors
-const getTokenColor = (symbol: string) => {
-  const colors: Record<string, string> = {
-    ETH: '#627EEA',
-    USDT: '#26A17B',
-    USDC: '#2775CA',
-    DAI: '#F5AC37',
-    WETH: '#627EEA',
-    UNI: '#FF007A',
-  };
-  return colors[symbol] || '#8B5CF6';
-};
+type TokenWithAmount = TokenOption & { amount: number };
 
 export default function SendScreen() {
-  const { wallet, cryptoData, refreshCryptoData } = useWallet();
+  const { wallet, cryptoData, ensureSmartWalletAddress, refreshCryptoData } = useWallet();
+  const { showError } = useNotifications();
   const [recipientAddress, setRecipientAddress] = useState('');
   const [amount, setAmount] = useState('');
-  const [selectedToken, setSelectedToken] = useState<{ symbol: string; amount: number } | null>(null);
+  const [selectedTokenSymbol, setSelectedTokenSymbol] = useState('ETH');
   const [isLoading, setIsLoading] = useState(false);
   const [showTokenSelector, setShowTokenSelector] = useState(false);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [transactionHash, setTransactionHash] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
-  const copyAnimation = useRef(new Animated.Value(0)).current;
+  const tokenModalAnim = useRef(new Animated.Value(0)).current;
+  const [refreshing, setRefreshing] = useState(false);
+  const pullDistance = useRef(new Animated.Value(0)).current;
 
-  // Get available tokens from portfolio (memoized to prevent new references on every render)
-  const availableTokens = useMemo(() => 
-    cryptoData?.portfolio.filter(token => token.amount > 0) || []
-  , [cryptoData?.portfolio]);
-  
-  // Set default token to first available or ETH
-  React.useEffect(() => {
-    if (!selectedToken && availableTokens.length > 0) {
-      setSelectedToken({ symbol: availableTokens[0].symbol, amount: availableTokens[0].amount });
-    } else if (!selectedToken) {
-      setSelectedToken({ symbol: 'ETH', amount: 0 });
-    }
-  }, [cryptoData]); // eslint-disable-line react-hooks/exhaustive-deps
+  const baseTokenCatalog = useMemo<TokenOption[]>(() => [ETH_TOKEN, ...SUPPORTED_TOKENS], []);
 
-  // Update selectedToken balance when cryptoData changes
-  useEffect(() => {
-    if (selectedToken && availableTokens.length > 0) {
-      const token = availableTokens.find(t => t.symbol === selectedToken.symbol);
-      if (token && Math.abs(token.amount - selectedToken.amount) > 0.000001) { // Use float comparison for balance updates
-        setSelectedToken({ symbol: selectedToken.symbol, amount: token.amount });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cryptoData]);
-
-  // Auto-update account state when success modal is shown
-  useEffect(() => {
-    if (showSuccessModal) {
-      // Start periodic updates every 3 seconds
-      updateIntervalRef.current = setInterval(() => {
-        refreshCryptoData();
-      }, 3000);
-
-      // Cleanup on unmount or when modal closes
-      return () => {
-        if (updateIntervalRef.current) {
-          clearInterval(updateIntervalRef.current);
-          updateIntervalRef.current = null;
-        }
+  const tokenOptions = useMemo<TokenWithAmount[]>(() => {
+    return baseTokenCatalog.map((token) => {
+      const portfolioEntry = cryptoData?.portfolio.find(
+        (entry) => entry.symbol.toUpperCase() === token.symbol.toUpperCase()
+      );
+      return {
+        ...token,
+        amount: portfolioEntry?.amount ?? 0,
       };
-    } else {
-      // Clear interval when modal is closed
-      if (updateIntervalRef.current) {
-        clearInterval(updateIntervalRef.current);
-        updateIntervalRef.current = null;
-      }
+    });
+  }, [baseTokenCatalog, cryptoData?.portfolio]);
+
+  const spendableTokens = useMemo(
+    () => tokenOptions.filter((token) => token.amount > 0),
+    [tokenOptions]
+  );
+  const hasSpendableTokens = spendableTokens.length > 0;
+  const selectedTokenMeta = useMemo(
+    () => tokenOptions.find((token) => token.symbol === selectedTokenSymbol),
+    [tokenOptions, selectedTokenSymbol]
+  );
+  const selectedSpendableToken = hasSpendableTokens
+    ? spendableTokens.find((token) => token.symbol === selectedTokenSymbol)
+    : undefined;
+  const selectedTokenColor = selectedSpendableToken?.color ?? '#8B5CF6';
+
+  useEffect(() => {
+    if (!hasSpendableTokens) {
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showSuccessModal]);
+    const exists = spendableTokens.some((token) => token.symbol === selectedTokenSymbol);
+    if (!exists) {
+      setSelectedTokenSymbol(spendableTokens[0].symbol);
+    }
+  }, [hasSpendableTokens, spendableTokens, selectedTokenSymbol]);
+
+  const handleOpenTokenSelector = () => {
+    setShowTokenSelector(true);
+    tokenModalAnim.setValue(0);
+    Animated.timing(tokenModalAnim, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handleCloseTokenSelector = () => {
+    Animated.timing(tokenModalAnim, {
+      toValue: 0,
+      duration: 180,
+      easing: Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start(() => setShowTokenSelector(false));
+  };
+
+  const handleSelectToken = (symbol: string) => {
+    setSelectedTokenSymbol(symbol);
+    handleCloseTokenSelector();
+  };
+
+  const modalOverlayStyle = {
+    opacity: tokenModalAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0, 1],
+    }),
+  };
+
+  const modalContentStyle = {
+    opacity: tokenModalAnim,
+    transform: [
+      {
+        translateY: tokenModalAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [40, 0],
+        }),
+      },
+      {
+        scale: tokenModalAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.95, 1],
+        }),
+      },
+    ],
+  };
 
   const validateInputs = () => {
     setError(null);
 
     // Check if all fields are filled
-    if (!recipientAddress || !amount || !selectedToken) {
+    if (!recipientAddress || !amount || !selectedSpendableToken) {
       setError('Please fill in all fields');
       return false;
     }
@@ -130,16 +174,47 @@ export default function SendScreen() {
     }
 
     // Check if amount exceeds balance
-    if (amountNum > selectedToken.amount) {
-      setError(`Insufficient balance. You have ${selectedToken.amount.toFixed(6)} ${selectedToken.symbol}`);
+    if (amountNum > (selectedSpendableToken.amount ?? 0)) {
+      setError(`Insufficient balance. You have ${selectedSpendableToken.amount.toFixed(6)} ${selectedSpendableToken.symbol}`);
       return false;
     }
 
     return true;
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshCryptoData();
+    } catch (error) {
+      console.error('Error refreshing send screen data:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleScroll = (event: any) => {
+    const offset = event.nativeEvent.contentOffset.y;
+    if (offset < 0) {
+      pullDistance.setValue(Math.min(-offset, 120));
+    } else {
+      pullDistance.setValue(0);
+    }
+  };
+
+  const indicatorHeight = pullDistance.interpolate({
+    inputRange: [0, 120],
+    outputRange: [0, 90],
+    extrapolate: 'clamp',
+  });
+
+  const indicatorOpacity = pullDistance.interpolate({
+    inputRange: [0, 20, 60],
+    outputRange: [0, 0.3, 1],
+    extrapolate: 'clamp',
+  });
+
   const handleSend = async () => {
-    // Validate inputs
     if (!validateInputs()) {
       return;
     }
@@ -152,102 +227,51 @@ export default function SendScreen() {
     setIsLoading(true);
     setError(null);
 
-    const startTime = Date.now();
-    const minWaitTime = 3000; // 3 seconds minimum
-
     try {
-      // Get token address - empty for ETH
       const normalizedAmount = amount.replace(',', '.');
-      const tokenInfo = TOKEN_ADDRESSES[selectedToken!.symbol];
-      const tokenAddress = tokenInfo?.address || undefined;
+      const tokenInfo = selectedSpendableToken;
+      if (!tokenInfo) {
+        throw new Error('No spendable tokens available.');
+      }
+      const kernelAddress = wallet.smartWalletAddress || (await ensureSmartWalletAddress());
+      const tokenAddress = tokenInfo.address ? tokenInfo.address : undefined;
 
-      // Call server-side API to send transaction
       const response = await apiClient.sendTransaction({
         to: recipientAddress.trim(),
         amount: normalizedAmount,
         tokenAddress,
+        kernelAddress,
       });
 
-      // Calculate remaining time to reach minimum wait
-      const elapsedTime = Date.now() - startTime;
-      const remainingTime = Math.max(0, minWaitTime - elapsedTime);
-
-      // Wait for minimum time before showing result
-      await new Promise(resolve => setTimeout(resolve, remainingTime));
-
-      if (response.success && response.txHash) {
-        // Success - refresh data and show modal
-        setTransactionHash(response.txHash);
-        
-        // Refresh balances and transactions after successful send
-        try {
-          await refreshCryptoData();
-        } catch (refreshError) {
-          console.error('Error refreshing data after send:', refreshError);
-          // Don't fail the transaction if refresh fails
-        }
-        
-        // Show success modal after data refresh
-        setShowSuccessModal(true);
-      } else {
-        setError(response.error || 'Transaction failed');
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to prepare transaction');
       }
-    } catch (error) {
-      // Calculate remaining time to reach minimum wait even on error
-      const elapsedTime = Date.now() - startTime;
-      const remainingTime = Math.max(0, minWaitTime - elapsedTime);
-      
-      if (remainingTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, remainingTime));
-      }
-      
+
+      const decimals = tokenInfo.decimals ?? 18;
+      const amountWei = parseUnits(normalizedAmount, decimals).toString();
+
+      transactionReviewState.set({
+        kind: 'account-transaction',
+        payload: {
+          kernelAddress: kernelAddress as Address,
+          recipient: recipientAddress.trim() as Address,
+          tokenAddress: tokenAddress as Address | undefined,
+          tokenSymbol: tokenInfo.symbol ?? 'ETH',
+          decimals,
+          amountInput: normalizedAmount,
+          amountWei,
+          unsignedUserOp: response.data,
+        },
+      });
+
+      router.push('/settings/smart-watch-connection/transaction-review');
+    } catch (error: any) {
       console.error('Send transaction error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      setError(`Transaction failed: ${errorMessage}`);
+      const errorMessage = error?.message || 'Transaction failed';
+      setError(errorMessage);
+      showError(errorMessage, { title: 'Transaction error' });
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleSuccessClose = async () => {
-    setShowSuccessModal(false);
-    setRecipientAddress('');
-    setAmount('');
-    setTransactionHash('');
-    setError(null);
-    setCopiedField(null);
-    
-    // Refresh data again when modal closes (in case transaction was confirmed while modal was open)
-    try {
-      await refreshCryptoData();
-    } catch (refreshError) {
-      console.error('Error refreshing data on close:', refreshError);
-    }
-  };
-
-  const copyToClipboard = async (text: string, field: string) => {
-    try {
-      await Clipboard.setStringAsync(text);
-      setCopiedField(field);
-      
-      // Trigger animation
-      Animated.sequence([
-        Animated.timing(copyAnimation, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.delay(1200),
-        Animated.timing(copyAnimation, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
-        setCopiedField(null);
-      });
-    } catch (error) {
-      console.error('Failed to copy to clipboard:', error);
     }
   };
 
@@ -264,7 +288,24 @@ export default function SendScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+      <AnimatedScrollView
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={false}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#8B5CF6"
+            colors={['#8B5CF6']}
+            progressBackgroundColor="#1A1A1A"
+          />
+        }
+      >
+        <Animated.View style={[styles.pullIndicator, { height: indicatorHeight, opacity: indicatorOpacity }]}>
+          <ActivityIndicator size="small" color="#8B5CF6" />
+        </Animated.View>
         <View style={styles.content}>
           <Text style={styles.title}>Send Crypto</Text>
           <Text style={styles.subtitle}>Transfer tokens to another wallet</Text>
@@ -272,18 +313,22 @@ export default function SendScreen() {
           {/* Token Selector */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Select Token</Text>
-            <TouchableOpacity 
-              style={styles.tokenSelector}
-              onPress={() => setShowTokenSelector(true)}
-            >
-              {selectedToken && (
-                <View style={styles.tokenInfo}>
-                  <View style={[styles.tokenIcon, { backgroundColor: getTokenColor(selectedToken.symbol) }]}>
-                    <Text style={styles.tokenIconText}>{selectedToken.symbol[0]}</Text>
-                  </View>
-                  <Text style={styles.tokenName}>{selectedToken.symbol}</Text>
+            <TouchableOpacity style={styles.tokenSelector} onPress={handleOpenTokenSelector}>
+              <View style={styles.tokenInfo}>
+                <View style={[styles.tokenIcon, { backgroundColor: selectedTokenColor }]}>
+                  <Text style={styles.tokenIconText}>{selectedSpendableToken?.symbol?.[0] ?? '?'}</Text>
                 </View>
-              )}
+                <View>
+                  <Text style={styles.tokenName}>
+                    {selectedSpendableToken?.symbol || 'Select token'}
+                  </Text>
+                  <Text style={styles.tokenMetaText}>
+                    {selectedSpendableToken
+                      ? `${selectedSpendableToken.amount.toFixed(4)} ${selectedSpendableToken.symbol}`
+                      : 'No spendable tokens available'}
+                  </Text>
+                </View>
+              </View>
               <IconSymbol name="chevron.down" size={20} color="#A0A0A0" />
             </TouchableOpacity>
           </View>
@@ -321,13 +366,13 @@ export default function SendScreen() {
                 }}
                 keyboardType="decimal-pad"
               />
-              {selectedToken && <Text style={styles.tokenSymbol}>{selectedToken.symbol}</Text>}
+              {selectedSpendableToken && <Text style={styles.tokenSymbol}>{selectedSpendableToken.symbol}</Text>}
             </View>
-            {selectedToken && (
-              <Text style={styles.balanceText}>
-                Balance: {selectedToken.amount.toFixed(6)} {selectedToken.symbol}
-              </Text>
-            )}
+            <Text style={styles.balanceText}>
+              {selectedSpendableToken
+                ? `Balance: ${selectedSpendableToken.amount.toFixed(6)} ${selectedSpendableToken.symbol}`
+                : 'Balance: —'}
+            </Text>
           </View>
 
           {/* Error Message */}
@@ -357,117 +402,64 @@ export default function SendScreen() {
             )}
           </TouchableOpacity>
         </View>
-      </ScrollView>
+      </AnimatedScrollView>
 
       {/* Token Selector Modal */}
-      <Modal
-        visible={showTokenSelector}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowTokenSelector(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal visible={showTokenSelector} transparent animationType="none" onRequestClose={handleCloseTokenSelector}>
+        <View style={styles.modalRoot}>
+          <TouchableWithoutFeedback onPress={handleCloseTokenSelector}>
+            <Animated.View style={[styles.modalOverlay, modalOverlayStyle]} />
+          </TouchableWithoutFeedback>
+          <Animated.View style={[styles.tokenModalContent, modalContentStyle]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Token</Text>
-              <TouchableOpacity onPress={() => setShowTokenSelector(false)}>
-                <IconSymbol name="xmark" size={24} color="#FFFFFF" />
+              <View>
+                <Text style={styles.modalTitle}>Choose a token</Text>
+                <Text style={styles.modalSubtitle}>Only tokens with balance can be selected</Text>
+              </View>
+              <TouchableOpacity onPress={handleCloseTokenSelector} style={styles.closeButton}>
+                <IconSymbol name="xmark" size={18} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            
-            {availableTokens.map((token) => (
-              <TouchableOpacity 
-                key={token.symbol}
-                style={styles.tokenOption}
-                onPress={() => {
-                  setSelectedToken({ symbol: token.symbol, amount: token.amount });
-                  setShowTokenSelector(false);
-                }}
-              >
-                <View style={styles.tokenInfo}>
-                  <View style={[styles.tokenIcon, { backgroundColor: getTokenColor(token.symbol) }]}>
-                    <Text style={styles.tokenIconText}>{token.symbol[0]}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.tokenName}>{token.name}</Text>
-                    <Text style={styles.tokenSymbolSmall}>{token.symbol}</Text>
-                  </View>
-                </View>
-                <Text style={styles.tokenBalance}>{token.amount.toFixed(6)} {token.symbol}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+
+            {hasSpendableTokens ? (
+              <ScrollView contentContainerStyle={styles.tokenList}>
+                {spendableTokens.map((token) => {
+                  const isSelected = token.symbol === selectedTokenSymbol;
+                  return (
+                    <TouchableOpacity
+                      key={token.symbol}
+                      style={[styles.tokenCard, isSelected && styles.tokenCardSelected]}
+                      onPress={() => handleSelectToken(token.symbol)}
+                    >
+                      <View style={styles.tokenCardLeft}>
+                        <View style={[styles.tokenIconLarge, { backgroundColor: token.color ?? '#2F2F2F' }]}>
+                          <Text style={styles.tokenIconText}>{token.symbol[0]}</Text>
+                        </View>
+                        <View>
+                          <Text style={styles.tokenCardTitle}>{token.name}</Text>
+                          <Text style={styles.tokenCardSubtitle}>{token.symbol}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.tokenCardRight}>
+                        <Text style={styles.tokenAmountText}>
+                          {token.amount.toFixed(4)} {token.symbol}
+                        </Text>
+                        {isSelected && <IconSymbol name="checkmark.circle.fill" size={18} color="#39b981" />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <View style={styles.emptyTokenState}>
+                <Text style={styles.emptyTokenTitle}>No spendable tokens</Text>
+                <Text style={styles.emptyTokenSubtitle}>Deposit funds to enable sending.</Text>
+              </View>
+            )}
+          </Animated.View>
         </View>
       </Modal>
 
-      {/* Success Modal */}
-      <Modal
-        visible={showSuccessModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={handleSuccessClose}
-      >
-        <View style={styles.successModalOverlay}>
-          <View style={styles.successModalContent}>
-            <Text style={styles.successTitle}>Transaction Confirmed!</Text>
-            <Text style={styles.successSubtitle}>Your transaction has been successfully sent</Text>
-
-            <View style={styles.successDetails}>
-              <View style={styles.successDetailRow}>
-                <Text style={styles.successDetailLabel}>Token</Text>
-                <Text style={styles.successDetailValue}>
-                  {selectedToken?.symbol} • {parseFloat(amount).toFixed(6)}
-                </Text>
-              </View>
-
-              <View style={styles.successDetailRow}>
-                <Text style={styles.successDetailLabel}>Recipient</Text>
-                <View style={styles.addressRow}>
-                  <Text style={styles.successDetailAddress}>
-                    {recipientAddress.slice(0, 10)}...{recipientAddress.slice(-8)}
-                  </Text>
-                  <TouchableOpacity 
-                    onPress={() => copyToClipboard(recipientAddress, 'recipient')}
-                    style={styles.successCopyButton}
-                  >
-                    {copiedField === 'recipient' ? (
-                      <IconSymbol name="checkmark.circle.fill" size={20} color="#10B981" />
-                    ) : (
-                      <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.successDetailRow}>
-                <Text style={styles.successDetailLabel}>Transaction Hash</Text>
-                <View style={styles.addressRow}>
-                  <Text style={styles.successDetailAddress}>
-                    {transactionHash.slice(0, 10)}...{transactionHash.slice(-8)}
-                  </Text>
-                  <TouchableOpacity 
-                    onPress={() => copyToClipboard(transactionHash, 'hash')}
-                    style={styles.successCopyButton}
-                  >
-                    {copiedField === 'hash' ? (
-                      <IconSymbol name="checkmark.circle.fill" size={20} color="#10B981" />
-                    ) : (
-                      <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-
-            <TouchableOpacity 
-              style={styles.successButton}
-              onPress={handleSuccessClose}
-            >
-              <Text style={styles.successButtonText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -479,6 +471,11 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+  },
+  pullIndicator: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
   },
   content: {
     paddingHorizontal: 24,
@@ -506,14 +503,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   tokenSelector: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 12,
+    backgroundColor: '#141414',
+    borderRadius: 16,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: '#242424',
   },
   tokenInfo: {
     flexDirection: 'row',
@@ -537,9 +534,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  tokenSymbolSmall: {
-    fontSize: 14,
-    color: '#A0A0A0',
+  tokenMetaText: {
+    fontSize: 13,
+    color: '#8A8A8A',
+    marginTop: 2,
   },
   input: {
     backgroundColor: '#1A1A1A',
@@ -603,18 +601,21 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
-  modalOverlay: {
+  modalRoot: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     justifyContent: 'flex-end',
   },
-  modalContent: {
-    backgroundColor: '#1A1A1A',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 20,
-    paddingBottom: 40,
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+  },
+  tokenModalContent: {
+    backgroundColor: '#0E0E0E',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 40,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -627,18 +628,79 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFFFFF',
   },
-  tokenOption: {
+  modalSubtitle: {
+    color: '#9CA3AF',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  closeButton: {
+    padding: 8,
+    borderRadius: 999,
+    backgroundColor: '#1F1F1F',
+  },
+  tokenList: {
+    gap: 12,
+  },
+  tokenCard: {
+    backgroundColor: '#131313',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333333',
   },
-  tokenBalance: {
-    fontSize: 16,
+  tokenCardSelected: {
+    borderColor: '#39b981',
+  },
+  tokenCardDisabled: {
+    opacity: 0.5,
+  },
+  tokenCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  tokenIconLarge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tokenCardTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  tokenCardSubtitle: {
+    color: '#9CA3AF',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  tokenCardRight: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  tokenAmountText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '500',
-    color: '#A0A0A0',
+  },
+  emptyTokenState: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyTokenTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyTokenSubtitle: {
+    color: '#9CA3AF',
+    fontSize: 14,
   },
   errorContainer: {
     flexDirection: 'row',
@@ -655,79 +717,4 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: '500',
   },
-  successModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  successModalContent: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 24,
-    padding: 32,
-    width: '100%',
-    maxWidth: 400,
-    alignItems: 'center',
-  },
-  successTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 8,
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  successSubtitle: {
-    fontSize: 16,
-    color: '#A0A0A0',
-    marginBottom: 32,
-    textAlign: 'center',
-  },
-  successDetails: {
-    width: '100%',
-    marginBottom: 24,
-  },
-  successDetailRow: {
-    marginBottom: 20,
-  },
-  successDetailLabel: {
-    fontSize: 14,
-    color: '#A0A0A0',
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  successDetailValue: {
-    fontSize: 16,
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  addressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  successDetailAddress: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    fontFamily: 'monospace',
-    flex: 1,
-  },
-  successCopyButton: {
-    padding: 4,
-  },
-  successButton: {
-    backgroundColor: '#8B5CF6',
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    width: '100%',
-    alignItems: 'center',
-  },
-  successButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
 });
-

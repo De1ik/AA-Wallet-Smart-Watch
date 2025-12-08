@@ -98,6 +98,23 @@ export const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#333333',
+    gap: 12,
+  },
+  deviceCardProcessing: {
+    borderColor: '#8B5CF6',
+    backgroundColor: '#1F1530',
+  },
+  deviceIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#2D1B47',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deviceTitleWrap: {
+    flex: 1,
+    gap: 2,
   },
   deviceHeader: {
     flexDirection: 'row',
@@ -110,6 +127,13 @@ export const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFFFFF',
     flex: 1,
+  },
+  deviceMeta: {
+    fontSize: 12,
+    color: '#C4B5FD',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   editNameText: {
     color: '#8B5CF6',
@@ -508,9 +532,23 @@ export const styles = StyleSheet.create({
     lineHeight: 20,
   },
   deviceActions: {
+    marginTop: 12,
+  },
+  processingBanner: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#2F1F4B',
+    borderWidth: 1,
+    borderColor: '#6D28D9',
+  },
+  processingText: {
+    color: '#EDE9FE',
+    fontWeight: '600',
+    fontSize: 13,
   },
   detailsButton: {
     padding: 8,

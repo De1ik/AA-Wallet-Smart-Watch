@@ -242,9 +242,8 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
             value = numericAmount * 0; // Unknown tokens, would need price API
           }
 
-          // Create unique ID by combining hash, from, to, eventType, tokenAddress, and tokenId to handle duplicates
-          // Internal transactions, token transfers, and NFTs with the same hash need unique IDs
-          const uniqueId = `${tx.hash}-${tx.from || 'unknown'}-${tx.to || 'unknown'}-${tx.eventType || 'external'}-${tx.tokenAddress || ''}-${tx.tokenId || ''}-${tx.value}`;
+          // Provide a stable ID and keep the original hash separately for details screen
+          const uniqueId = `${tx.hash}-${tx.eventType || 'external'}-${tx.tokenAddress || ''}-${tx.tokenId || ''}-${tx.value}`;
           
           let status: TxStatus = TxStatus.SUCCESS;
           if (tx.status === TxStatus.FAILED) {
@@ -264,6 +263,7 @@ export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
             timestamp,
             status,
             errorMessage: tx.errorMessage,
+            transactionHash: tx.hash,
           };
         })
         .filter((tx): tx is NonNullable<typeof tx> => tx !== null); // Remove null entries

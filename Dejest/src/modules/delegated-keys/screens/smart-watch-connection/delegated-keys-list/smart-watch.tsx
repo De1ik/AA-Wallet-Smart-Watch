@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator, Clipboard } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator, Animated, Easing } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
@@ -66,6 +67,8 @@ const calculateRevocationGasEstimate = (unpacked?: PrepareDataForSigning['unpack
   }
 };
 
+const getTrackerKey = (device?: DelegatedKeyData, address?: string) => device?.id ?? address ?? '';
+
 export default function SmartWatchScreen() {
   const [connectedDevices, setConnectedDevices] = useState<DelegatedKeyData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -87,10 +90,33 @@ export default function SmartWatchScreen() {
   const [nameEdits, setNameEdits] = useState<Record<string, string>>({});
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmPayload, setConfirmPayload] = useState<{ device?: DelegatedKeyData; address?: string } | null>(null);
-  const [isPreparingRevocation, setIsPreparingRevocation] = useState(false);
+  const [revocationStatus, setRevocationStatus] = useState<Record<string, 'idle' | 'preparing'>>({});
   const { wallet } = useWallet();
   const { showSuccess, showError, showInfo } = useNotifications();
-  const isRevocationBusy = isPreparingRevocation;
+  const processingPulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(processingPulse, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(processingPulse, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    animation.start();
+    return () => {
+      animation.stop();
+    };
+  }, [processingPulse]);
 
   // Load delegated keys on component mount and when focused
 
@@ -286,7 +312,10 @@ export default function SmartWatchScreen() {
       return;
     }
 
-    setIsPreparingRevocation(true);
+    const trackerKey = getTrackerKey(device, delegatedAddress);
+    if (trackerKey) {
+      setRevocationStatus((prev) => ({ ...prev, [trackerKey]: 'preparing' }));
+    }
     try {
       const prepareResult = await apiClient.prepareRevokeKey({
         delegatedEOA: delegatedAddress as Address,
@@ -328,12 +357,18 @@ export default function SmartWatchScreen() {
       console.error('Error preparing revocation:', error);
       showError(error?.message || 'Failed to prepare revocation');
     } finally {
-      setIsPreparingRevocation(false);
+      if (trackerKey) {
+        setRevocationStatus((prev) => {
+          const updated = { ...prev };
+          delete updated[trackerKey];
+          return updated;
+        });
+      }
     }
   };
 
   const handleCopyAddress = (address: string) => {
-    Clipboard.setString(address);
+    Clipboard.setStringAsync(address);
     showInfo('Delegated public key copied');
   };
 
@@ -359,10 +394,17 @@ export default function SmartWatchScreen() {
     });
   };
 
+  const resolveKernelAddress = () => {
+    return wallet?.smartWalletAddress || getKernelAddress() || '';
+  };
+
   const handleSyncFromContract = async () => {
     try {
       setIsSyncingKeys(true);
-      const kernelAddress = getKernelAddress() || '0xB115dc375D7Ad88D7c7a2180D0E548Cb5B83D86A';
+      const kernelAddress = resolveKernelAddress();
+      if (!kernelAddress) {
+        throw new Error('Smart wallet address is not available');
+      }
       const storedKeys = await getDelegatedKeysStorage();
       const storedMap = new Map(storedKeys.map(k => [k.publicAddress.toLowerCase(), k]));
 
@@ -603,88 +645,98 @@ export default function SmartWatchScreen() {
                 <Text style={styles.loadingText}>Loading devices...</Text>
               </View>
             ) : connectedDevices.length > 0 ? (
-              connectedDevices.map((device) => (
-                <View key={device.id} style={styles.deviceCard}>
-                  <View style={styles.deviceHeader}>
-                    <IconSymbol name="applewatch" size={24} color="#8B5CF6" />
-                    <Text style={styles.deviceName}>{device.deviceName}</Text>
-                    {nameEdits[device.id] === undefined && (
-                      <TouchableOpacity onPress={() => startEditingName(device)} style={styles.editIconButton}>
-                        <IconSymbol name="pencil" size={14} color="#8B5CF6" />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  
-                  <View style={styles.deviceDetails}>
-                    {nameEdits[device.id] !== undefined && (
-                      <View style={styles.editNameRow}>
-                        <TextInput
-                          style={styles.nameInput}
-                          value={nameEdits[device.id]}
-                          onChangeText={(text) => setNameEdits(prev => ({ ...prev, [device.id]: text }))}
-                          placeholder="Device name"
-                          placeholderTextColor="#666666"
-                        />
-                        <TouchableOpacity style={styles.saveNameButton} onPress={() => saveEditedName(device)}>
-                          <Text style={styles.saveNameButtonText}>Save</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.cancelEditButton}
-                          onPress={() => setNameEdits(prev => { const c = { ...prev }; delete c[device.id]; return c; })}
-                        >
-                          <Text style={styles.cancelEditButtonText}>Cancel</Text>
-                        </TouchableOpacity>
+              connectedDevices.map((device) => {
+                const trackerKey = getTrackerKey(device);
+                const isProcessing = revocationStatus[trackerKey] === 'preparing';
+                const accessLabel =
+                  device.keyType === PermissionPolicyType.CALL_POLICY ? 'Restricted access' : 'Full access';
+                return (
+                  <View key={device.id} style={[styles.deviceCard, isProcessing && styles.deviceCardProcessing]}>
+                    <View style={styles.deviceHeader}>
+                      <View style={styles.deviceIconWrap}>
+                        <IconSymbol name="applewatch" size={18} color="#FFFFFF" />
                       </View>
-                    )}
+                      <View style={styles.deviceTitleWrap}>
+                        <Text style={styles.deviceName}>{device.deviceName}</Text>
+                        <Text style={styles.deviceMeta}>{accessLabel}</Text>
+                      </View>
+                      {nameEdits[device.id] === undefined && (
+                        <TouchableOpacity onPress={() => startEditingName(device)} style={styles.editIconButton}>
+                          <IconSymbol name="pencil" size={14} color="#8B5CF6" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
 
-                    <View style={styles.addressSection}>
-                      <Text style={styles.detailLabel}>Public Delegated Address:</Text>
-                      <View style={styles.addressRow}>
-                        <Text style={styles.shortAddressText}>{formatShortAddress(device.publicAddress)}</Text>
-                        <TouchableOpacity
-                          style={styles.copyButton}
-                          onPress={() => handleCopyAddress(device.publicAddress)}
-                        >
-                          <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.viewFullButton}
-                          onPress={() => handleShowFullAddress(device.publicAddress)}
-                        >
-                          <IconSymbol name="eye" size={16} color="#8B5CF6" />
-                        </TouchableOpacity>
-                        {device.keyType === PermissionPolicyType.CALL_POLICY && (
-                          <TouchableOpacity
-                            style={styles.viewRestrictionsButton}
-                            onPress={() => handleViewRestrictions(device)}
-                          >
-                            <IconSymbol name="shield.checkered" size={16} color="#8B5CF6" />
+                    <View style={styles.deviceDetails}>
+                      {nameEdits[device.id] !== undefined && (
+                        <View style={styles.editNameRow}>
+                          <TextInput
+                            style={styles.nameInput}
+                            value={nameEdits[device.id]}
+                            onChangeText={(text) => setNameEdits(prev => ({ ...prev, [device.id]: text }))}
+                            placeholder="Device name"
+                            placeholderTextColor="#666666"
+                          />
+                          <TouchableOpacity style={styles.saveNameButton} onPress={() => saveEditedName(device)}>
+                            <Text style={styles.saveNameButtonText}>Save</Text>
                           </TouchableOpacity>
-                        )}
+                          <TouchableOpacity
+                            style={styles.cancelEditButton}
+                            onPress={() => setNameEdits(prev => { const c = { ...prev }; delete c[device.id]; return c; })}
+                          >
+                            <Text style={styles.cancelEditButtonText}>Cancel</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+
+                      <View style={styles.addressSection}>
+                        <Text style={styles.detailLabel}>Public Delegated Address:</Text>
+                        <View style={styles.addressRow}>
+                          <Text style={styles.shortAddressText}>{formatShortAddress(device.publicAddress)}</Text>
+                          <TouchableOpacity
+                            style={styles.copyButton}
+                            onPress={() => handleCopyAddress(device.publicAddress)}
+                          >
+                            <IconSymbol name="doc.on.doc" size={16} color="#8B5CF6" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.viewFullButton}
+                            onPress={() => handleShowFullAddress(device.publicAddress)}
+                          >
+                            <IconSymbol name="eye" size={16} color="#8B5CF6" />
+                          </TouchableOpacity>
+                          {device.keyType === PermissionPolicyType.CALL_POLICY && (
+                            <TouchableOpacity
+                              style={styles.viewRestrictionsButton}
+                              onPress={() => handleViewRestrictions(device)}
+                            >
+                              <IconSymbol name="shield.checkered" size={16} color="#8B5CF6" />
+                            </TouchableOpacity>
+                          )}
+                        </View>
                       </View>
                     </View>
-                    
-                    
-                  </View>
-                  
-                  <View style={styles.deviceActions}>
-                    <TouchableOpacity
-                      style={styles.revokeButton}
-                      onPress={() => handleRevokeDevice(device)}
-                      disabled={isRevocationBusy}
-                    >
-                      {isRevocationBusy ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
+                    <View style={styles.deviceActions}>
+                      {isProcessing ? (
+                        <Animated.View style={[styles.processingBanner, { opacity: Animated.add(0.5, Animated.multiply(processingPulse, 0.5)) }]}>
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                          <Text style={styles.processingText}>Preparing secure revocation…</Text>
+                        </Animated.View>
                       ) : (
-                        <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                        <TouchableOpacity
+                          style={styles.revokeButton}
+                          onPress={() => handleRevokeDevice(device)}
+                          disabled={isProcessing}
+                        >
+                          <IconSymbol name="trash" size={16} color="#FFFFFF" />
+                          <Text style={styles.revokeButtonText}>Revoke</Text>
+                          <IconSymbol name="chevron.right" size={14} color="#FFFFFF" />
+                        </TouchableOpacity>
                       )}
-                      <Text style={styles.revokeButtonText}>
-                        {isRevocationBusy ? 'Processing...' : 'Revoke'}
-                      </Text>
-                    </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              ))
+                );
+              })
             ) : (
               <View style={styles.emptyState}>
                 <IconSymbol name="applewatch" size={48} color="#666666" />

@@ -28,9 +28,21 @@ export interface RevocationReviewPayload {
   gasEstimateWei?: string;
 }
 
+export interface AccountTransactionReviewPayload {
+  kernelAddress: Address;
+  recipient: Address;
+  tokenAddress?: Address;
+  tokenSymbol: string;
+  decimals: number;
+  amountInput: string;
+  amountWei: string;
+  unsignedUserOp: PrepareDataForSigning;
+}
+
 export type TransactionReviewContext =
   | { kind: 'delegated-installation'; payload: InstallReviewPayload }
-  | { kind: 'delegated-revocation'; payload: RevocationReviewPayload };
+  | { kind: 'delegated-revocation'; payload: RevocationReviewPayload }
+  | { kind: 'account-transaction'; payload: AccountTransactionReviewPayload };
 
 class TransactionReviewStateManager {
   private context: TransactionReviewContext | null = null;

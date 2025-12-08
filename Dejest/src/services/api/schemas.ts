@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   AllowedToken,
+  BroadcastUserOpResponse,
   BalancesResponse,
   CallPolicyData,
   CallPolicyResponse,
@@ -128,9 +129,13 @@ export const CallPolicyResponseSchema: z.ZodType<CallPolicyResponse> = z.object(
 
 export const SendTransactionResponseSchema: z.ZodType<SendTransactionResponse> = z.object({
   success: z.boolean(),
-  txHash: hexString,
+  data: prepareDataForSigningSchema.optional(),
   message: z.string(),
   error: z.string().optional(),
+});
+
+export const BroadcastUserOpResponseSchema: z.ZodType<BroadcastUserOpResponse> = z.object({
+  txHash: hexString,
 });
 
 export const PrefundCheckResponseSchema: z.ZodType<PrefundCheckResponse> = z.object({

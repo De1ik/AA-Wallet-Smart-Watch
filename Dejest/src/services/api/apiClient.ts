@@ -1,4 +1,4 @@
-import { SignedDataForDelegateInstallation } from '@/domain/types';
+import { BroadcastUserOpResponse, SignedDataForDelegateInstallation } from '@/domain/types';
 import { config } from '@/config/env';
 
 import { 
@@ -23,6 +23,7 @@ import {
   RevokeExecuteResultSchema,
   RevokePrepareResultSchema,
   SendTransactionResponseSchema,
+  BroadcastUserOpResponseSchema,
   TransactionsResponseSchema,
   type DelegatedKeysResponse,
   type EntryPointDepositExecuteResult,
@@ -149,6 +150,7 @@ class ApiClient {
   async sendTransaction(params: {
     to: string;
     amount: string;
+    kernelAddress: string;
     tokenAddress?: string;
   }): Promise<SendTransactionResponse> {
     const data = await this.makeRequest('/wallet/send', {
@@ -156,6 +158,14 @@ class ApiClient {
       body: JSON.stringify(params),
     });
     return SendTransactionResponseSchema.parse(data);
+  }
+
+  async broadcastUserOperation(payload: SignedDataForDelegateInstallation): Promise<BroadcastUserOpResponse> {
+    const data = await this.makeRequest('/wallet/userOp/send-uop', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return BroadcastUserOpResponseSchema.parse(data);
   }
 
   // ----------------------- READ ONLY -----------------------

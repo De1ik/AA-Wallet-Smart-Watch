@@ -1,17 +1,16 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Stack } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { useWallet } from '@/modules/account/state/WalletContext';
 import { TxStatus, TxType } from '@/domain/types';
+import TransactionDetailsModal from '@/modules/account/components/TransactionDetailsModal';
 
 export default function TransactionsScreen() {
   const router = useRouter();
   const { cryptoData, wallet } = useWallet();
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -51,23 +50,12 @@ export default function TransactionsScreen() {
     }
   };
 
-  const copyToClipboard = async (text: string, field: string) => {
-    try {
-      await Clipboard.setStringAsync(text);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
-    } catch (error) {
-      console.error('Failed to copy to clipboard:', error);
-    }
-  };
-
   const openTransactionDetails = (transaction: any) => {
     setSelectedTransaction(transaction);
   };
 
   const closeModal = () => {
     setSelectedTransaction(null);
-    setCopiedField(null);
   };
 
   if (!cryptoData || !wallet) {
@@ -168,145 +156,11 @@ export default function TransactionsScreen() {
         )}
       </ScrollView>
 
-      {/* Transaction Details Modal */}
-      <Modal
+      <TransactionDetailsModal
         visible={selectedTransaction !== null}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={closeModal}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Transaction Details</Text>
-              <TouchableOpacity onPress={closeModal} style={styles.closeButton}>
-                <IconSymbol name="xmark" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.modalScrollView} showsVerticalScrollIndicator={false}>
-              {selectedTransaction && (
-                <>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Type</Text>
-                    <Text style={[styles.detailValue, { 
-                      color: selectedTransaction.type === 'receive' ? '#10B981' : '#EF4444' 
-                    }]}>
-                      {selectedTransaction.type === 'receive' ? 'Received' : 'Sent'}
-                    </Text>
-                  </View>
-
-                  {selectedTransaction.status && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Status</Text>
-                      <View style={styles.statusContainer}>
-                        <View style={[
-                          styles.statusBadge,
-                          { backgroundColor: selectedTransaction.status === 'failed' ? '#EF444420' : selectedTransaction.status === 'success' ? '#10B98120' : '#F59E0B20' }
-                        ]}>
-                          <Text style={[
-                            styles.statusText,
-                            { color: selectedTransaction.status === 'failed' ? '#EF4444' : selectedTransaction.status === 'success' ? '#10B981' : '#F59E0B' }
-                          ]}>
-                            {selectedTransaction.status === 'failed' ? 'Failed' : selectedTransaction.status === 'success' ? 'Success' : 'Pending'}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  )}
-
-                  {selectedTransaction.errorMessage && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Error</Text>
-                      <Text style={[styles.detailValue, { color: '#EF4444' }]}>
-                        {selectedTransaction.errorMessage}
-                      </Text>
-                    </View>
-                  )}
-
-                  {selectedTransaction.from && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>From</Text>
-                      <View style={styles.addressContainer}>
-                        <Text style={styles.detailAddress}>{selectedTransaction.from}</Text>
-                        <TouchableOpacity 
-                          onPress={() => copyToClipboard(selectedTransaction.from, 'from')}
-                          style={styles.copyButton}
-                        >
-                          <IconSymbol 
-                            name={copiedField === 'from' ? "checkmark.circle" : "doc.on.doc"} 
-                            size={20} 
-                            color={copiedField === 'from' ? "#10B981" : "#8B5CF6"} 
-                          />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  )}
-
-                  {selectedTransaction.to && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>To</Text>
-                      <View style={styles.addressContainer}>
-                        <Text style={styles.detailAddress}>{selectedTransaction.to}</Text>
-                        <TouchableOpacity 
-                          onPress={() => copyToClipboard(selectedTransaction.to, 'to')}
-                          style={styles.copyButton}
-                        >
-                          <IconSymbol 
-                            name={copiedField === 'to' ? "checkmark.circle" : "doc.on.doc"} 
-                            size={20} 
-                            color={copiedField === 'to' ? "#10B981" : "#8B5CF6"} 
-                          />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  )}
-
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Amount</Text>
-                    <Text style={[styles.detailValue, { 
-                      color: selectedTransaction.type === 'receive' ? '#10B981' : '#EF4444' 
-                    }]}>
-                      {selectedTransaction.type === 'receive' ? '+' : '-'}{formatAmount(selectedTransaction.amount)} {selectedTransaction.symbol}
-                    </Text>
-                  </View>
-
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Value</Text>
-                    <Text style={styles.detailValue}>
-                      {selectedTransaction.type === 'receive' ? '+' : '-'}{formatCurrency(selectedTransaction.value)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Timestamp</Text>
-                    <Text style={styles.detailValue}>
-                      {selectedTransaction.timestamp.toLocaleString()}
-                    </Text>
-                  </View>
-
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Transaction ID</Text>
-                    <View style={styles.addressContainer}>
-                      <Text style={styles.detailAddress}>{selectedTransaction.id}</Text>
-                      <TouchableOpacity 
-                        onPress={() => copyToClipboard(selectedTransaction.id, 'hash')}
-                        style={styles.copyButton}
-                      >
-                        <IconSymbol 
-                          name={copiedField === 'hash' ? "checkmark.circle" : "doc.on.doc"} 
-                          size={20} 
-                          color={copiedField === 'hash' ? "#10B981" : "#8B5CF6"} 
-                        />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+        transaction={selectedTransaction}
+        onClose={closeModal}
+      />
     </SafeAreaView>
     </>
   );
@@ -434,85 +288,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#1A1A1A',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2A2A2A',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  closeButton: {
-    width: 36,
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalScrollView: {
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-  },
-  detailRow: {
-    marginBottom: 24,
-  },
-  detailLabel: {
-    fontSize: 14,
-    color: '#A0A0A0',
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  detailValue: {
-    fontSize: 16,
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  detailAddress: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    fontFamily: 'monospace',
-    flex: 1,
-    paddingRight: 8,
-  },
-  addressContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  copyButton: {
-    padding: 4,
-  },
-  statusContainer: {
-    marginTop: 4,
-  },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-  },
-  statusText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
 });
-

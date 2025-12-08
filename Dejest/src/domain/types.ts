@@ -253,9 +253,13 @@ export interface TransactionsResponse {
 
 export interface SendTransactionResponse {
   success: boolean;
-  txHash: string;
+  data?: PrepareDataForSigning;
   message: string;
   error?: string;
+}
+
+export interface BroadcastUserOpResponse {
+  txHash: string;
 }
 
 

@@ -4,20 +4,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { useWallet } from '@/modules/account/state/WalletContext';
 import * as Clipboard from 'expo-clipboard';
+import { useNotifications } from '@/shared/contexts/NotificationContext';
 
 export default function ReceiveScreen() {
   const { wallet } = useWallet();
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const [addressType, setAddressType] = useState<'eoa' | 'smart'>('smart');
+  const { showSuccess, showError, showInfo } = useNotifications();
 
   const copyToClipboard = async (address: string, type: string) => {
     try {
       await Clipboard.setStringAsync(address);
       setCopiedAddress(address);
       setTimeout(() => setCopiedAddress(null), 2000);
-      Alert.alert('Copied!', `${type} address copied to clipboard`);
+      showInfo(`${type} address copied to clipboard`);
     } catch (error) {
-      Alert.alert('Error', 'Failed to copy address');
+      showError('Failed to copy address');
     }
   };
 
