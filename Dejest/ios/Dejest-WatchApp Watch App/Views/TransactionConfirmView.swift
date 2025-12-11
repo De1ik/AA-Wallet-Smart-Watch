@@ -239,6 +239,11 @@ struct TransactionConfirmView: View {
         errorMessage = ""
         session.isProcessingPendingTransaction = true
         
+        guard verifyServerPayloadMatchesRequest(for: pending) else {
+            session.isProcessingPendingTransaction = false
+            return
+        }
+        
         UserOpManager.shared.signUserOpHash(userOpHash: pending.response.userOpHash) { signResult in
             DispatchQueue.main.async {
                 switch signResult {
@@ -250,6 +255,35 @@ struct TransactionConfirmView: View {
                 }
             }
         }
+    }
+    
+    private func verifyServerPayloadMatchesRequest(for pending: PendingUserOp) -> Bool {
+        guard let echo = pending.response.echo else {
+            errorMessage = "Server response missing transaction echo data"
+            return false
+        }
+        
+        if echo.to.lowercased() != pending.receiver.lowercased() {
+            errorMessage = "Destination address mismatch. Please restart the transaction."
+            return false
+        }
+        
+        if echo.amountWei != pending.amountInWei {
+            errorMessage = "Amount mismatch. Please restart the transaction."
+            return false
+        }
+        
+        let originalToken = pending.tokenAddress?.lowercased() ?? "eth"
+        let serverToken = echo.tokenAddress?.lowercased() ?? "eth"
+        if originalToken != serverToken {
+            errorMessage = "Token mismatch. Please restart the transaction."
+            return false
+        }
+        
+        // Placeholder for future hash recalculation / deeper validation
+        // validateUserOperationHashMatchesPayload(pending)
+        
+        return true
     }
     
     private func broadcastTransaction(pending: PendingUserOp, signature: String) {
@@ -290,5 +324,11 @@ struct TransactionConfirmView: View {
             return NSDecimalNumber(decimal: rounded).stringValue
         }
         return amount
+    }
+    
+    // Placeholder for future server payload hash validation (recalculation)
+    private func validateUserOperationHashMatchesPayload(_ pending: PendingUserOp) -> Bool {
+        // TODO: Recompute operation hash locally and compare with pending.response.userOpHash
+        return true
     }
 }

@@ -1,1 +1,8 @@
 Etherscan_kernel/
+kernel_factory/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
+*.code-workspace 

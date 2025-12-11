@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { useWallet } from '@/modules/account/state/WalletContext';
@@ -9,17 +9,24 @@ import { useNotifications } from '@/shared/contexts/NotificationContext';
 export default function ReceiveScreen() {
   const { wallet } = useWallet();
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
-  const [addressType, setAddressType] = useState<'eoa' | 'smart'>('smart');
-  const { showSuccess, showError, showInfo } = useNotifications();
+  const { showError, showInfo } = useNotifications();
 
-  const copyToClipboard = async (address: string, type: string) => {
+  const copyToClipboard = async (address: string) => {
     try {
       await Clipboard.setStringAsync(address);
       setCopiedAddress(address);
       setTimeout(() => setCopiedAddress(null), 2000);
-      showInfo(`${type} address copied to clipboard`);
+      showInfo('Address copied to clipboard');
     } catch (error) {
       showError('Failed to copy address');
+    }
+  };
+
+  const handleShare = async (address: string) => {
+    try {
+      await Share.share({ message: `Send funds to this address: ${address}` });
+    } catch (error) {
+      showError('Unable to share address');
     }
   };
 
@@ -34,97 +41,96 @@ export default function ReceiveScreen() {
     );
   }
 
-  const displayAddress = addressType === 'smart' && wallet.smartWalletAddress 
-    ? wallet.smartWalletAddress 
-    : wallet.address;
-
-  const hasSmartWallet = !!wallet.smartWalletAddress;
+  const displayAddress = wallet.smartWalletAddress || wallet.address || '';
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.content}>
-          {/* Header */}
           <View style={styles.header}>
-            <View>
-              <Text style={styles.title}>Receive Funds</Text>
-              <Text style={styles.subtitle}>Share your address to receive payments</Text>
-            </View>
+            <Text style={styles.title}>Receive Funds</Text>
+            <Text style={styles.subtitle}>Share your smart wallet address to accept payments securely</Text>
           </View>
 
-          {/* Address Type Toggle */}
-          {hasSmartWallet && (
-            <View style={styles.toggleContainer}>
-              <TouchableOpacity 
-                style={[styles.toggleButton, addressType === 'smart' && styles.toggleButtonActive]}
-                onPress={() => setAddressType('smart')}
-              >
-                <Text style={[styles.toggleText, addressType === 'smart' && styles.toggleTextActive]}>
-                  Smart Wallet
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.toggleButton, addressType === 'eoa' && styles.toggleButtonActive]}
-                onPress={() => setAddressType('eoa')}
-              >
-                <Text style={[styles.toggleText, addressType === 'eoa' && styles.toggleTextActive]}>
-                  EOA Wallet
-                </Text>
-              </TouchableOpacity>
+          <View style={styles.heroCard}>
+            <View style={styles.heroIconWrap}>
+              <IconSymbol name="arrow.down.to.line" size={28} color="#FFFFFF" />
             </View>
-          )}
+            <Text style={styles.heroTitle}>Smart wallet ready</Text>
+            <Text style={styles.heroSubtitle}>
+              Your address is protected by delegated keys and spending limits. Copy or share it with confidence.
+            </Text>
+            <View style={styles.heroMetaRow}>
+              <View style={styles.heroMetaPill}>
+                <IconSymbol name="lock.shield.fill" size={14} color="#8B5CF6" />
+                <Text style={styles.heroMetaText}>Session keys enabled</Text>
+              </View>
+              <View style={styles.heroMetaPill}>
+                <IconSymbol name="timelapse" size={14} color="#8B5CF6" />
+                <Text style={styles.heroMetaText}>Instant status</Text>
+              </View>
+            </View>
+          </View>
 
           {/* Selected Address Card */}
           <View style={styles.addressCard}>
             <View style={styles.addressHeader}>
               <View style={styles.addressTypeBadge}>
-                <IconSymbol 
-                  name={addressType === 'smart' ? "wallet.pass.fill" : "person.fill"} 
-                  size={20} 
-                  color="#8B5CF6" 
-                />
+                <IconSymbol name="wallet.pass.fill" size={20} color="#8B5CF6" />
                 <Text style={styles.addressTypeLabel}>
-                  {addressType === 'smart' ? 'Smart Wallet' : 'EOA'} Address
+                  Smart Wallet Address
                 </Text>
               </View>
-              <TouchableOpacity
-                style={styles.copyButton}
-                onPress={() => {
-                  const type = addressType === 'smart' ? 'Smart wallet' : 'EOA';
-                  copyToClipboard(displayAddress, type);
-                }}
-              >
-                <IconSymbol 
-                  name={copiedAddress === displayAddress ? "checkmark.circle.fill" : "doc.on.doc"} 
-                  size={24} 
-                  color={copiedAddress === displayAddress ? "#10B981" : "#8B5CF6"} 
-                />
-              </TouchableOpacity>
             </View>
             
             <View style={styles.addressDisplayContainer}>
               <Text style={styles.addressText}>{displayAddress}</Text>
             </View>
+
+            <View style={styles.addressActions}>
+              <TouchableOpacity
+                style={[styles.primaryButton, copiedAddress === displayAddress && styles.primaryButtonSuccess]}
+                onPress={() => copyToClipboard(displayAddress)}
+              >
+                <IconSymbol
+                  name={copiedAddress === displayAddress ? 'checkmark' : 'doc.on.doc'}
+                  size={16}
+                  color="#FFFFFF"
+                />
+                <Text style={styles.primaryButtonText}>
+                  {copiedAddress === displayAddress ? 'Copied' : 'Copy address'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondaryButton} onPress={() => handleShare(displayAddress)}>
+                <IconSymbol name="square.and.arrow.up" size={16} color="#8B5CF6" />
+                <Text style={styles.secondaryButtonText}>Share</Text>
+              </TouchableOpacity>
+            </View>
             
             <View style={styles.addressInfoContainer}>
               <IconSymbol name="info.circle" size={16} color="#8B5CF6" />
               <Text style={styles.addressNote}>
-                {addressType === 'smart' 
-                  ? 'Smart wallet supports advanced features and session keys' 
-                  : 'Standard Ethereum address - simple and widely compatible'}
+                Smart wallet supports advanced features, delegated permissions, and automated policies.
               </Text>
             </View>
           </View>
 
-          {/* QR Code Placeholder */}
-          <View style={styles.qrCard}>
-            <View style={styles.qrCode}>
-              <IconSymbol name="qrcode" size={120} color="#8B5CF6" />
+          {/* Info Grid */}
+          <View style={styles.infoGrid}>
+            <View style={styles.infoTile}>
+              <IconSymbol name="sparkles" size={18} color="#8B5CF6" />
+              <Text style={styles.infoTileTitle}>Best for</Text>
+              <Text style={styles.infoTileBody}>
+                Delegated keys, smart automations, and ERC-4337 flows with spending controls.
+              </Text>
             </View>
-            <Text style={styles.qrText}>QR Code</Text>
-            <Text style={styles.qrNote}>
-              {addressType === 'smart' ? 'Smart Wallet' : 'EOA'} Address
-            </Text>
+            <View style={styles.infoTile}>
+              <IconSymbol name="bolt.fill" size={18} color="#8B5CF6" />
+              <Text style={styles.infoTileTitle}>Network</Text>
+              <Text style={styles.infoTileBody}>
+                Ethereum Sepolia · Compatible with AA-aware dApps & wallets.
+              </Text>
+            </View>
           </View>
 
           {/* Instructions */}
@@ -152,9 +158,9 @@ export default function ReceiveScreen() {
                   <Text style={styles.instructionNumberText}>2</Text>
                 </View>
                 <View style={styles.instructionContent}>
-                  <Text style={styles.instructionTitle}>Scan QR code</Text>
+                  <Text style={styles.instructionTitle}>Share securely</Text>
                   <Text style={styles.instructionText}>
-                    Let the sender scan the QR code for instant transactions
+                    Use copy or share actions above so senders paste the exact address.
                   </Text>
                 </View>
               </View>
@@ -164,9 +170,9 @@ export default function ReceiveScreen() {
                   <Text style={styles.instructionNumberText}>3</Text>
                 </View>
                 <View style={styles.instructionContent}>
-                  <Text style={styles.instructionTitle}>Wait for confirmation</Text>
+                  <Text style={styles.instructionTitle}>Track confirmation</Text>
                   <Text style={styles.instructionText}>
-                    Transactions will appear in your wallet once confirmed
+                    Monitor the dashboard for pending and confirmed transfers.
                   </Text>
                 </View>
               </View>
@@ -212,43 +218,65 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   header: {
-    marginBottom: 24,
+    marginBottom: 20,
+    gap: 6,
   },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
     color: '#FFFFFF',
-    marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
     color: '#A0A0A0',
   },
-  toggleContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 20,
-    backgroundColor: '#1A1A1A',
-    padding: 4,
-    borderRadius: 12,
+  heroCard: {
+    backgroundColor: '#140A2A',
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#2D1444',
+    marginBottom: 24,
   },
-  toggleButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  toggleButtonActive: {
+  heroIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
     backgroundColor: '#8B5CF6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
   },
-  toggleText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#A0A0A0',
-  },
-  toggleTextActive: {
+  heroTitle: {
+    fontSize: 22,
+    fontWeight: '700',
     color: '#FFFFFF',
+    marginBottom: 6,
+  },
+  heroSubtitle: {
+    color: '#C4B5FD',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  heroMetaRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  heroMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#1E1139',
+  },
+  heroMetaText: {
+    color: '#E0E7FF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   addressCard: {
     backgroundColor: '#1A1A1A',
@@ -274,9 +302,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  copyButton: {
-    padding: 8,
-  },
   addressDisplayContainer: {
     backgroundColor: '#0F0F0F',
     padding: 16,
@@ -289,6 +314,45 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     lineHeight: 20,
   },
+  addressActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  primaryButton: {
+    flex: 1,
+    backgroundColor: '#8B5CF6',
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  primaryButtonSuccess: {
+    backgroundColor: '#10B981',
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  secondaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2D2D2D',
+    backgroundColor: '#151515',
+  },
+  secondaryButtonText: {
+    color: '#8B5CF6',
+    fontWeight: '600',
+  },
   addressInfoContainer: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -300,34 +364,31 @@ const styles = StyleSheet.create({
     color: '#8B5CF6',
     lineHeight: 18,
   },
-  qrCard: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 16,
-    padding: 32,
+  infoGrid: {
+    flexDirection: 'row',
+    gap: 12,
     marginBottom: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
+    flexWrap: 'wrap',
   },
-  qrCode: {
-    width: 200,
-    height: 200,
-    backgroundColor: '#FFFFFF',
+  infoTile: {
+    flex: 1,
+    minWidth: 140,
+    backgroundColor: '#151022',
     borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#241A3A',
+    gap: 6,
   },
-  qrText: {
-    fontSize: 18,
-    fontWeight: '600',
+  infoTileTitle: {
     color: '#FFFFFF',
-    marginBottom: 4,
-  },
-  qrNote: {
     fontSize: 14,
-    color: '#8B5CF6',
-    fontWeight: '500',
+    fontWeight: '600',
+  },
+  infoTileBody: {
+    color: '#A0A0A0',
+    fontSize: 13,
+    lineHeight: 18,
   },
   instructionsCard: {
     backgroundColor: '#1A1A1A',
@@ -415,4 +476,3 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
-

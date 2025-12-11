@@ -1,203 +1,54 @@
-# Smart Watch Bridge Documentation
+# Smart Watch Bridge
 
-## Overview
+Native bridge for Apple Watch connectivity (iOS only) used to generate delegated keys and sync permissions.
 
-The Smart Watch Bridge is a comprehensive system that enables communication between the mobile app and Apple Watch for delegated key management. It handles key generation, permission synchronization, and error management.
+## Where it lives
+- Bridge implementation: `src/services/native/smartWatchBridge.ts`
+- React hook wrapper: `src/shared/hooks/useSmartWatch.ts`
+- Main UI flow: `src/modules/delegated-keys/screens/smart-watch-connection/create-delegated-key/create-key.tsx`
 
-## Architecture
+## Current capabilities
+- `pingWatch()` — connectivity check (iOS/WalletBridge required)
+- `requestKeyGeneration(data)` — asks the watch to generate a key pair (returns `address`)
+- `syncPermissionData(data)` — pushes permission metadata (ids, tokens, recipients) to the watch
+- `getAccountData()` — placeholder; replace with real wallet data when available
+- `sendToWatch(payload)` — generic payload bridge
+- Helpers: `validatePermissionData`, `formatWatchError`, `getBridgeStatus`
 
-### Components
-
-1. **SmartWatchBridge Class** (`/utils/smartWatchBridge.ts`)
-   - Singleton pattern for global access
-   - Handles all communication with Apple Watch
-   - Manages request/response lifecycle
-   - Provides error handling and user feedback
-
-2. **useSmartWatch Hook** (`/hooks/useSmartWatch.ts`)
-   - React hook for easy integration
-   - Manages connection state and loading states
-   - Provides typed functions for key operations
-
-3. **Integration in Create Key Screen** (`/app/settings/smart-watch/create-key.tsx`)
-   - Complete workflow implementation
-   - Real-time connection status
-   - Step-by-step process with user feedback
-
-## Workflow
-
-### 1. User Initiates Key Creation
-```
-User clicks "Create Delegated Key" 
-→ App checks watch connection
-→ Shows connection status
-```
-
-### 2. Key Generation Request
-```
-App requests key generation from watch
-→ Watch generates private/public key pair
-→ Watch returns public key to app
-→ App stores key pair data
-```
-
-### 3. Blockchain Operations
-```
-App uses public key to create delegated access
-→ buildInstallPermissionUO() - Install permission validation
-→ buildEnableSelectorUO() - Enable execute selector (for restricted)
-→ buildGrantAccessUO() - Grant access to selector
-→ sendUserOpV07() - Send each user operation
-```
-
-### 4. Data Synchronization
-```
-App saves delegated key data to AsyncStorage
-→ App sends permission data to watch
-→ Watch stores permission ID and vId
-→ Process complete
-```
-
-## API Reference
-
-### SmartWatchBridge Class
-
-#### Methods
-
-```typescript
-// Get singleton instance
-static getInstance(): SmartWatchBridge
-
-// Check connection status
-isWatchConnected(): boolean
-
-// Request key generation from watch
-requestKeyGeneration(): Promise<WatchKeyPair>
-
-// Sync permission data to watch
-syncPermissionData(data: WatchPermissionData): Promise<boolean>
-
-// Ping watch for connection test
-pingWatch(): Promise<boolean>
-
-// Show user-friendly error messages
-showConnectionError(error: Error): void
-
-// Show connection status
-showConnectionStatus(): void
-```
-
-#### Types
-
-```typescript
-interface WatchKeyPair {
-  privateKey: string;  // Generated on watch (never leaves watch)
-  publicKey: string;   // Returned to app
-  address: string;     // Derived address
+Types:
+```ts
+interface WatchGenarteKeyData {
+  kernelAddress: string;
+  whitelist?: { name: string; address: string }[];
+  allowedTokens?: { address: string; symbol: string; name?: string; decimals: number }[];
 }
 
 interface WatchPermissionData {
   permissionId: string;
   vId: string;
   deviceName: string;
-  keyType: 'sudo' | 'restricted';
+  keyType: PermissionPolicyType; // sudo | call-policy
   createdAt: string;
-}
-
-interface WatchRequest {
-  type: 'GENERATE_KEY_PAIR' | 'SYNC_PERMISSION_DATA' | 'PING';
-  data?: any;
-  requestId: string;
-}
-
-interface WatchResponse {
-  type: 'KEY_PAIR_GENERATED' | 'PERMISSION_DATA_SYNCED' | 'PONG' | 'ERROR';
-  data?: any;
-  requestId: string;
-  success: boolean;
-  error?: string;
+  allowedTokens?: ...
+  allowedRecipients?: string[];
 }
 ```
 
-### useSmartWatch Hook
+## Usage flow (Create Delegated Key screen)
+1. `useSmartWatch.checkConnection()` on mount to set `isConnected`.
+2. User starts creation → `requestKeyGeneration` with kernel address/whitelist/token data.
+3. Watch returns `address`; app saves a pending device and continues blockchain ops.
+4. After on-chain setup, `syncPermissionData` sends permission/vId/token/recipient info to the watch.
+5. Optional messages to watch via `smartWatchBridge.sendToWatch` (e.g., `START_INSTALLATION`).
 
-#### Return Value
+## Platform notes
+- Bridge works on iOS via `NativeModules.WalletBridge`; Android currently returns false/throws.
+- `getAccountData` is stubbed; wire it to wallet context/service for real balances/history.
+- Errors surface in `useSmartWatch` via `error`/`isLoading`; show user-friendly messaging in UI.
 
-```typescript
-interface UseSmartWatchReturn {
-  isConnected: boolean;                    // Watch connection status
-  isLoading: boolean;                      // Loading state
-  error: string | null;                    // Error message
-  requestKeyGeneration: () => Promise<WatchKeyPair>;
-  syncPermissionData: (data: WatchPermissionData) => Promise<boolean>;
-  checkConnection: () => Promise<boolean>;
-  clearError: () => void;
-}
-```
-
-#### Usage Example
-
-```typescript
-import { useSmartWatch } from '@/hooks/useSmartWatch';
-
-function MyComponent() {
-  const { 
-    isConnected, 
-    isLoading, 
-    error,
-    requestKeyGeneration,
-    syncPermissionData,
-    checkConnection,
-    clearError 
-  } = useSmartWatch();
-
-  const handleCreateKey = async () => {
-    try {
-      const keyPair = await requestKeyGeneration();
-      // Use keyPair.publicKey for blockchain operations
-      
-      const permissionData = {
-        permissionId: '0x...',
-        vId: '0x...',
-        deviceName: 'My Watch',
-        keyType: 'restricted',
-        createdAt: new Date().toISOString()
-      };
-      
-      await syncPermissionData(permissionData);
-    } catch (error) {
-      console.error('Error:', error);
-    }
-  };
-
-  return (
-    <View>
-      <Text>Watch Status: {isConnected ? 'Connected' : 'Disconnected'}</Text>
-      <Button onPress={handleCreateKey} disabled={!isConnected} />
-    </View>
-  );
-}
-```
-
-## Error Handling
-
-### Connection Errors
-- **Not Connected**: "Please ensure your Apple Watch is connected"
-- **Timeout**: "Request to smart watch timed out"
-- **Key Generation Failed**: "Failed to generate keys on smart watch"
-
-### User Feedback
-- Real-time connection status indicator
-- Loading states during operations
-- Error messages with actionable advice
-- Success confirmations with details
-
-## Security Considerations
-
-### Key Management
-- **Private keys never leave the Apple Watch**
-- **Public keys are transmitted securely**
-- **Permission data is encrypted in transit**
+## Security notes
+- Private keys are generated on the watch; the bridge only receives the derived address.
+- Validate payloads (`validatePermissionData`) before syncing.
 
 ### Data Flow
 1. Watch generates and stores private key locally

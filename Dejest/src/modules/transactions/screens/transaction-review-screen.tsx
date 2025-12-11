@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router } from 'expo-router';
-import { formatUnits } from 'viem';
+import { formatUnits, decodeFunctionData, getFunctionSelector, parseAbi } from 'viem';
+import type { Address, Hex } from 'viem';
 
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { styles as delegatedStyles } from '@/modules/delegated-keys/screens/smart-watch-connection/create-delegated-key/styles';
@@ -60,6 +61,94 @@ const formatWeiToEth = (value?: bigint) => {
     return formatUnits(value, 18);
   } catch {
     return null;
+  }
+};
+
+const kernelExecuteAbi = parseAbi(['function execute(bytes32 mode, bytes execCalldata) payable']);
+const erc20TransferAbi = parseAbi(['function transfer(address to, uint256 amount) returns (bool)']);
+const EXECUTE_USER_OP_SELECTOR = getFunctionSelector(
+  'function executeUserOp((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes) userOp, bytes32 userOpHash)'
+);
+
+type DecodedExecData = {
+  target: Address;
+  value: bigint;
+  innerData: Hex;
+};
+
+const stripExecuteUserOpPrefix = (data: Hex): Hex => {
+  const normalizedData = data.toLowerCase();
+  const prefix = EXECUTE_USER_OP_SELECTOR.toLowerCase();
+  if (normalizedData.startsWith(prefix)) {
+    return (`0x${data.slice(EXECUTE_USER_OP_SELECTOR.length)}`) as Hex;
+  }
+  return data;
+};
+
+const decodeExecDataFromCallData = (callData: Hex): DecodedExecData => {
+  const payload = stripExecuteUserOpPrefix(callData);
+  const { functionName, args } = decodeFunctionData({
+    abi: kernelExecuteAbi,
+    data: payload,
+  });
+  if (functionName !== 'execute') {
+    throw new Error('Unexpected kernel call in user operation');
+  }
+  const execCalldata = args?.[1] as Hex;
+  if (!execCalldata) {
+    throw new Error('Missing exec calldata');
+  }
+  const raw = execCalldata.slice(2);
+  if (raw.length < 40 + 64) {
+    throw new Error('Malformed exec calldata');
+  }
+  const target = (`0x${raw.slice(0, 40)}`) as Address;
+  const value = BigInt(`0x${raw.slice(40, 40 + 64)}` || '0x0');
+  const innerHex = raw.slice(40 + 64);
+  const innerData = (`0x${innerHex}`) as Hex;
+  return { target, value, innerData };
+};
+
+const ensureAccountTransactionMatchesRequest = (payload: AccountTransactionReviewPayload) => {
+  const callData = payload.unsignedUserOp?.unpacked?.callData as Hex | undefined;
+  if (!callData) {
+    throw new Error('Missing callData in unsigned user operation');
+  }
+  const { target, value, innerData } = decodeExecDataFromCallData(callData);
+  const expectedAmount = BigInt(payload.amountWei);
+  const expectedRecipient = payload.recipient.toLowerCase();
+
+  if (payload.tokenAddress) {
+    if (target.toLowerCase() !== payload.tokenAddress.toLowerCase()) {
+      throw new Error('Prepared transaction token does not match request');
+    }
+    const decoded = decodeFunctionData({
+      abi: erc20TransferAbi,
+      data: innerData,
+    });
+    if (decoded.functionName !== 'transfer') {
+      throw new Error('Prepared transaction is not an ERC20 transfer');
+    }
+    const [to, amount] = decoded.args as [Address, bigint];
+    if (to.toLowerCase() !== expectedRecipient) {
+      throw new Error('Prepared transaction recipient mismatch');
+    }
+    if (amount !== expectedAmount) {
+      throw new Error('Prepared transaction amount mismatch');
+    }
+    if (value !== 0n) {
+      throw new Error('ERC20 transfer should not include native value');
+    }
+  } else {
+    if (target.toLowerCase() !== expectedRecipient) {
+      throw new Error('Prepared native transfer recipient mismatch');
+    }
+    if (value !== expectedAmount) {
+      throw new Error('Prepared native transfer amount mismatch');
+    }
+    if (innerData !== '0x') {
+      throw new Error('Native transfer should not include calldata');
+    }
   }
 };
 
@@ -285,6 +374,7 @@ export default function TransactionReviewScreen() {
   };
 
   const executeAccountTransaction = async (payload: AccountTransactionReviewPayload) => {
+    ensureAccountTransactionMatchesRequest(payload);
     const signedTransfer = (await processUnsigned(
       payload.unsignedUserOp,
       'unsignedTransferData'

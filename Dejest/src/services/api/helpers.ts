@@ -1,6 +1,5 @@
 import { InstallPrepareSuccess } from "@/domain/types";
 import { ErrorResponse, executedEntryPointDeposit, prepareEntryPointDeposit } from "./apiTypes";
-import { validateAndSign } from "@/services/blockchain/signUOp";
 
 export function isInstallPrepareSuccess(
   result: InstallPrepareSuccess | ErrorResponse
