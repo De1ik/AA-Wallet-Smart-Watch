@@ -378,13 +378,13 @@ struct BalanceView: View {
     }
     
     private func transactionHeadline(_ transaction: TransactionDTO) -> String {
-        let direction = (transaction.type ?? "sent").lowercased() == "sent" ? "Sent" : "Received"
+        let direction = transaction.directionDisplay
         let symbol = transaction.tokenSymbol ?? "ETH"
         return "\(direction) \(transaction.value) \(symbol)"
     }
     
     private func transactionSubline(_ transaction: TransactionDTO) -> String {
-        let counterparty = (transaction.type ?? "sent").lowercased() == "sent" ? transaction.to : transaction.from
+        let counterparty = transaction.isSent ? transaction.to : transaction.from
         var parts: [String] = []
         if let counterparty = counterparty {
             parts.append(shortAddress(counterparty))
@@ -393,15 +393,12 @@ struct BalanceView: View {
             let date = Date(timeIntervalSince1970: transaction.timestamp)
             parts.append(shortDateTimeFormatter.string(from: date))
         }
-        if let status = transaction.status {
-            parts.append(status.capitalized)
-        }
+        parts.append(transaction.statusDisplay)
         return parts.joined(separator: " • ")
     }
     
     private func transactionIcon(for transaction: TransactionDTO) -> Image {
-        let direction = (transaction.type ?? "sent").lowercased()
-        return direction == "sent" ? Image(systemName: "arrow.up.right") : Image(systemName: "arrow.down.left")
+        return transaction.isSent ? Image(systemName: "arrow.up.right") : Image(systemName: "arrow.down.left")
     }
     
     private var shortDateTimeFormatter: DateFormatter {
@@ -463,17 +460,15 @@ struct TransactionHistorySheet: View {
     }
     
     private func historyDirection(_ tx: TransactionDTO) -> String {
-        let direction = (tx.type ?? "sent").lowercased() == "sent" ? "Sent" : "Received"
-        return direction
+        tx.directionDisplay
     }
     
     private func historyStatus(_ tx: TransactionDTO) -> String {
-        tx.status?.capitalized ?? "Unknown"
+        tx.statusDisplay
     }
     
     private func historyCounterparty(_ tx: TransactionDTO) -> String? {
-        let direction = (tx.type ?? "sent").lowercased()
-        if direction == "sent", let to = tx.to {
+        if tx.isSent, let to = tx.to {
             return "To: \(shortAddress(to))"
         } else if let from = tx.from {
             return "From: \(shortAddress(from))"

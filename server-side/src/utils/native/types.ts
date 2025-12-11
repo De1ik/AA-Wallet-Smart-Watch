@@ -81,6 +81,7 @@ export interface PrepareDataForSigning {
   unpacked: UnpackedUserOperationV07;
   packed: PackedUserOperation;
   userOpHash: Hex;
+  estimatedFeeWei?: string;
 }
 
 export interface PrepareDelegateInstallation {
@@ -149,13 +150,19 @@ export type NormalizedCallPolicyPayload = {
 };
 
 export interface RevokePrepareInput {
-  delegatedEOA: string;
-  kernelAddress: string;
+  delegatedEOA: Address;
+  kernelAddress: Address;
+}
+
+export interface ExecuteDelegateRevoke {
+  signedRevokeData: SignedDataForDelegateInstallation;
 }
 
 export interface RevokeExecuteInput {
-  data: SignedDataForDelegateInstallation;
-  kernelAddress: string;
+  revocationId: string;
+  delegatedEOA: Address;
+  kernelAddress: Address;
+  data: ExecuteDelegateRevoke;
 }
 
 export interface InstallPrepareInput {
@@ -195,13 +202,15 @@ export interface InstallExecuteSuccess {
 
 export interface RevokePrepareSuccess {
   success: boolean;
-  data?: PrepareDataForSigning;
+  revocationId: string;
+  data: PrepareDataForSigning;
+  estimatedFeeWei?: string;
   message: string;
-  error?: string;
 }
 
 export interface RevokeExecuteSuccess {
   success: boolean;
-  data?: string;
+  revocationId: string;
+  txHash: Hex;
   message: string;
 }

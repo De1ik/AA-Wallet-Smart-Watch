@@ -26,6 +26,8 @@ struct ContentView: View {
             }
         case .transactions:
             TransactionView()
+        case .confirmTransaction:
+            TransactionConfirmView()
         }
       }
     }

@@ -2,7 +2,8 @@ import { Address, formatEther, parseAbi } from "viem";
 import { createPublicClient, http } from "viem";
 import { sepolia } from "viem/chains";
 
-import { ETH_RPC_URL } from "./constants";
+import { ETH_RPC_URL, TOKEN_METADATA } from "../../shared/constants/constants";
+import { ApiTransaction, TxStatus, TxType } from "../../modules/account";
 
 export interface TokenMetadata {
   address: Address;
@@ -12,43 +13,6 @@ export interface TokenMetadata {
   color: string;
 }
 
-export const SEPOLIA_TOKENS: TokenMetadata[] = [
-  {
-    address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984" as Address,
-    symbol: "UNI",
-    name: "Uniswap",
-    decimals: 18,
-    color: "#FF007A",
-  },
-  {
-    address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" as Address,
-    symbol: "WETH",
-    name: "Wrapped Ether",
-    decimals: 18,
-    color: "#627EEA",
-  },
-  {
-    address: "0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0" as Address,
-    symbol: "USDT",
-    name: "Tether USD",
-    decimals: 6,
-    color: "#26a17b",
-  },
-  {
-    address: "0x94a9d9ac8a22534e3faca9f4e7f2e2cf85d5e4c8" as Address,
-    symbol: "USDC",
-    name: "USD Coin",
-    decimals: 6,
-    color: "#2775CA",
-  },
-  {
-    address: "0xff34b3d4aee8ddcd6f9afffb6fe49bd371b8a357" as Address,
-    symbol: "DAI",
-    name: "Dai Stablecoin",
-    decimals: 18,
-    color: "#F5AC37",
-  },
-];
 
 export async function fetchAllTokenBalances(address: Address): Promise<{
   ethBalance: string;
@@ -80,7 +44,7 @@ export async function fetchAllTokenBalances(address: Address): Promise<{
     const ethBalance = formatEther(ethBalanceWei);
 
     const tokenBalances = await Promise.all(
-      SEPOLIA_TOKENS.map(async (token) => {
+      TOKEN_METADATA.map(async (token) => {
         try {
           const balanceWei = await client.readContract({
             address: token.address,
@@ -165,20 +129,7 @@ export async function fetchAllTokenBalances(address: Address): Promise<{
 export async function fetchTransactionHistory(
   address: Address,
   limit: number = 20
-): Promise<
-  Array<{
-    hash: string;
-    from: string;
-    to: string;
-    value: string;
-    timestamp: number;
-    type: "sent" | "received";
-    status: "success" | "pending" | "failed";
-    tokenSymbol?: string;
-    tokenAddress?: string;
-    eventType?: string;
-  }>
-> {
+): Promise<ApiTransaction[]> {
   const client = createPublicClient({
     chain: sepolia,
     transport: http(ETH_RPC_URL),
@@ -194,18 +145,7 @@ export async function fetchTransactionHistory(
   ]);
 
   try {
-    const allTransactions: Array<{
-      hash: string;
-      from: string;
-      to: string;
-      value: string;
-      timestamp: number;
-      type: "sent" | "received";
-      status: "success" | "pending" | "failed";
-      tokenSymbol?: string;
-      tokenAddress?: string;
-      eventType?: string;
-    }> = [];
+    const allTransactions: ApiTransaction[] = [];
 
     if (alchemyApiKey) {
       try {
@@ -338,14 +278,14 @@ export async function fetchTransactionHistory(
               continue;
             }
 
-            let status: "success" | "pending" | "failed" = "success";
+            let status: TxStatus = TxStatus.SUCCESS;
             try {
               if (transfer.hash) {
                 const receipt = await client.getTransactionReceipt({ hash: transfer.hash as `0x${string}` });
-                status = receipt ? (receipt.status === "success" ? "success" : "failed") : "pending";
+                status = receipt ? (receipt.status === "success" ? TxStatus.SUCCESS : TxStatus.FAILED) : TxStatus.PENDING;
               }
             } catch {
-              status = "pending";
+              status = TxStatus.PENDING;
             }
 
             allTransactions.push({
@@ -354,7 +294,7 @@ export async function fetchTransactionHistory(
               to: transfer.to || "0x0000000000000000000000000000000000000000",
               value: valueStr,
               timestamp: Math.floor(timestamp / 1000),
-              type: isReceived ? "received" : "sent",
+              type: isReceived ? TxType.RECEIVED : TxType.SENT,
               status,
               tokenSymbol,
               tokenAddress: transfer.rawContract?.address || undefined,
@@ -377,7 +317,7 @@ export async function fetchTransactionHistory(
 
       const transferEventAbi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)"]);
 
-      for (const token of SEPOLIA_TOKENS) {
+      for (const token of TOKEN_METADATA) {
         try {
           const logsTo = await client.getLogs({
             address: token.address,
@@ -422,8 +362,8 @@ export async function fetchTransactionHistory(
                 to: log.args.to || "0x0000000000000000000000000000000000000000",
                 value: valueStr,
                 timestamp: Number(block.timestamp),
-                type: isReceived ? "received" : "sent",
-                status: receipt ? (receipt.status === "success" ? "success" : "failed") : "pending",
+                type: isReceived ? TxType.RECEIVED : TxType.SENT,
+                status: receipt ? (receipt.status === "success" ? TxStatus.SUCCESS : TxStatus.FAILED) : TxStatus.PENDING,
                 tokenSymbol: token.symbol,
                 tokenAddress: token.address,
                 eventType: "token_transfer",

@@ -1,8 +1,8 @@
 import { Address, Hex, encodeAbiParameters, encodePacked, keccak256 } from "viem";
 
-import { CALL_POLICY } from "./constants";
+import { CALL_POLICY } from "../../shared/constants/constants";
 import { callPolicyAbi } from "./abi";
-import { publicClient } from "./clients";
+import { publicClient } from "../../shared/clients/sepoliaClient";
 import { CallPolicyParamRule, CallPolicyPermission } from "./types";
 
 // ---------------- UTILITY FUNCTIONS ----------------

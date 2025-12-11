@@ -4,6 +4,7 @@ import WatchConnectivity
 enum AppScreen {
     case home
     case transactions
+    case confirmTransaction
 }
 
 class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
@@ -18,6 +19,9 @@ class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     
     @Published var txHash: String? = nil
     @Published var showSuccessView: Bool = false
+    
+    @Published var pendingTransaction: PendingUserOp? = nil
+    @Published var isProcessingPendingTransaction: Bool = false
   
   
     private override init() { super.init() }
@@ -48,6 +52,7 @@ class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
           DispatchQueue.main.async {
               self.txHash = hash
               self.showSuccessView = true
+              self.currentScreen = .home
           }
     }
       
@@ -56,6 +61,24 @@ class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             self.showSuccessView = false
             self.txHash = nil
             self.currentScreen = redirectTo
+        }
+    }
+    
+    func presentPendingTransaction(_ pending: PendingUserOp) {
+        DispatchQueue.main.async {
+            self.pendingTransaction = pending
+            self.isProcessingPendingTransaction = false
+            self.currentScreen = .confirmTransaction
+        }
+    }
+    
+    func dismissPendingTransaction() {
+        DispatchQueue.main.async {
+            self.pendingTransaction = nil
+            self.isProcessingPendingTransaction = false
+            if self.currentScreen == .confirmTransaction {
+                self.currentScreen = .transactions
+            }
         }
     }
   

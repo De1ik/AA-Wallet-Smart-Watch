@@ -8,9 +8,9 @@ import {
   MAX_PRIORITY_FEE_LIMIT,
   MIN_FEE_PER_GAS,
   MIN_PRIORITY_FEE,
-} from "./constants";
-import { ENTRY_POINT } from "./constants";
-import { bundlerClient, publicClient } from "./clients";
+} from "../../shared/constants/constants";
+import { ENTRY_POINT } from "../../shared/constants/constants";
+import { bundlerClient, publicClient } from "../../shared/clients/sepoliaClient";
 import { UnpackedUserOperationV07 } from "./types";
 
 export async function getCurrentGasPrices(): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {

@@ -23,6 +23,8 @@ struct TransactionView: View {
     @State private var allowedTokens: [[String: Any]] = []
     @State private var showTokenPicker: Bool = false
     
+    private let session = WatchSessionManager.shared
+    
     var body: some View {
         ZStack {
             // Background gradient
@@ -166,8 +168,8 @@ struct TransactionView: View {
                     }
               
                     if isLoading {
-                         ProgressView("Processing transaction...")
-                             .padding(.top, 10)
+                        ProgressView("Preparing transaction...")
+                            .padding(.top, 10)
                     } else {
                         Button(action: {
                             sendDelegatedTransaction()
@@ -189,7 +191,6 @@ struct TransactionView: View {
                         .buttonStyle(.plain)
                         .padding(.top, 10)
                         .disabled(toAddress.isEmpty || amount.isEmpty)
-
                     }
                     
                     if !txHash.isEmpty {
@@ -268,6 +269,7 @@ struct TransactionView: View {
             )
         }
     }
+    
     
     private struct TokenPickerView: View {
         let tokens: [[String: Any]]
@@ -397,6 +399,7 @@ struct TransactionView: View {
     // MARK: - Delegated Transaction Flow
     
     private func sendDelegatedTransaction() {
+        errorText = ""
         let token = allowedTokensWithEth().first { ($0["address"] as? String)?.lowercased() == selectedTokenAddress.lowercased() }
         let decimals = token?["decimals"] as? Int ?? 18
         
@@ -419,20 +422,35 @@ struct TransactionView: View {
         
         print("🚀 Starting delegated tx: from=\(from), to=\(to), amount=\(amount), token=\(tokenAddress ?? "ETH")")
         
-        UserOpManager.shared.prepareSignAndSendUserOp(kernelAddress: kernelAddress, from: from, to: to, amountInWei: amountInUnits, tokenAddress: tokenAddress) { result in
-          DispatchQueue.main.async {
-            isLoading = false
-            
-            switch result {
-                case .success(let hash):
-                    print("✅ Delegated transaction sent! Hash: \(hash)")
-                    WatchSessionManager.shared.handleTxSuccess(hash: hash)
-
+        UserOpManager.shared.requestUnsignedUserOp(
+            kernelAddress: kernelAddress,
+            from: from,
+            to: to,
+            amountInWei: amountInUnits,
+            tokenAddress: tokenAddress
+        ) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                
+                switch result {
+                case .success(let unsignedResponse):
+                    let pending = PendingUserOp(
+                        kernelAddress: kernelAddress,
+                        delegatedEOA: from,
+                        receiver: to,
+                        receiverLabel: getReceiverName(index: selectedReceiverIndex),
+                        displayAmount: amount,
+                        amountInWei: amountInUnits,
+                        tokenAddress: tokenAddress,
+                        tokenSymbol: displayTokenName(address: selectedTokenAddress),
+                        response: unsignedResponse
+                    )
+                    session.presentPendingTransaction(pending)
                 case .failure(let error):
-                    print("❌ Delegated transaction error:", error.localizedDescription)
+                    print("❌ Delegated transaction prepare error:", error.localizedDescription)
                     errorText = "❌ " + error.localizedDescription
-              }
-          }
+                }
+            }
         }
     }
     

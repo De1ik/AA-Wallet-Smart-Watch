@@ -1,10 +1,10 @@
 import { Address, Hex, concat, encodeAbiParameters, encodeFunctionData, getFunctionSelector, keccak256, pad, toHex } from "viem";
 
-import { CALL_POLICY, ECDSA_SIGNER, SUDO_POLICY } from "./constants";
+import { CALL_POLICY, ECDSA_SIGNER, SUDO_POLICY } from "../../shared/constants/constants";
 import { kernelAbi } from "./abi";
-import { publicClient } from "./clients";
+import { publicClient } from "../../shared/clients/sepoliaClient";
 import { CallPolicyPermission } from "./types";
-import { checkPrefundSimple } from "../../routes/wallet.prefund";
+import { checkPrefundSimple } from "../../modules/entrypoint/prefund";
 
 export const EXECUTE_USER_OP_SELECTOR: Hex = getFunctionSelector(
   "function executeUserOp((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes) userOp, bytes32 userOpHash)"

@@ -20,14 +20,100 @@ struct BalancesResponseDTO: Codable {
 }
 
 /// Mirrors the transaction history payload that the React Native app consumes
+enum TransactionDirectionDTO: Codable {
+    case sent
+    case received
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intValue = try? container.decode(Int.self) {
+            self = intValue == 1 ? .received : .sent
+            return
+        }
+        if let stringValue = try? container.decode(String.self) {
+            self = stringValue.lowercased().contains("receive") ? .received : .sent
+            return
+        }
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unable to decode transaction direction")
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self == .received ? 1 : 0)
+    }
+
+    var label: String {
+        self == .received ? "receive" : "sent"
+    }
+
+    var displayLabel: String {
+        self == .received ? "Received" : "Sent"
+    }
+
+    var isSent: Bool {
+        self == .sent
+    }
+}
+
+enum TransactionStatusDTO: Codable {
+    case success
+    case failed
+    case pending
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intValue = try? container.decode(Int.self) {
+            switch intValue {
+            case 1: self = .failed
+            case 2: self = .pending
+            default: self = .success
+            }
+            return
+        }
+        if let stringValue = try? container.decode(String.self) {
+            let lower = stringValue.lowercased()
+            if lower.contains("fail") {
+                self = .failed
+            } else if lower.contains("pend") {
+                self = .pending
+            } else {
+                self = .success
+            }
+            return
+        }
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unable to decode transaction status")
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .success: try container.encode(0)
+        case .failed: try container.encode(1)
+        case .pending: try container.encode(2)
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .success: return "success"
+        case .failed: return "failed"
+        case .pending: return "pending"
+        }
+    }
+
+    var displayLabel: String {
+        label.capitalized
+    }
+}
+
 struct TransactionDTO: Codable, Identifiable {
     let hash: String
     let from: String?
     let to: String?
     let value: String
     let timestamp: TimeInterval
-    let type: String?
-    let status: String?
+    let type: TransactionDirectionDTO?
+    let status: TransactionStatusDTO?
     let tokenSymbol: String?
     let tokenAddress: String?
     let eventType: String?
@@ -35,6 +121,22 @@ struct TransactionDTO: Codable, Identifiable {
     let tokenId: String?
     
     var id: String { hash + (tokenId ?? "") + (eventType ?? "") }
+
+    var directionLabel: String {
+        type?.label ?? "sent"
+    }
+
+    var directionDisplay: String {
+        type?.displayLabel ?? "Sent"
+    }
+
+    var statusDisplay: String {
+        status?.displayLabel ?? "Success"
+    }
+
+    var isSent: Bool {
+        type?.isSent ?? true
+    }
 }
 
 struct TransactionsResponseDTO: Codable {

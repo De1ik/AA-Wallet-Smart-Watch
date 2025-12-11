@@ -14,7 +14,7 @@ import {
   CALL_POLICY,
   ENTRY_POINT,
   HOOK_SENTINEL
-} from "./constants";
+} from "../../shared/constants/constants";
 
 import { PackedUserOperation as u1 } from "viem/_types/account-abstraction";
 
@@ -33,12 +33,12 @@ import {
   vIdFromPermissionId,
   EXEC_MODE_SIMPLE_SINGLE,
 } from "./helpers";
-import { bundlerClient, publicClient } from "./clients";
+import { bundlerClient, publicClient } from "../../shared/clients/sepoliaClient";
 import { callPolicyAbi, entryPointAbi, kernelAbi, kernelAbiGrant, kernelInstallValidationsAbi, stakeAbi } from "./abi";
-import { getCurrentGasPrices, getOptimizedGasLimits } from "./gas";
+import { getCurrentGasPrices, getOptimizedGasLimits, estimateAndPatch } from "./gas";
 import { CallPolicyPermission, PackedUserOperation, UnpackedUserOperationV07 } from "./types";
 import { applyZeroDevPaymaster } from "../paymaster";
-import { debugLog } from "./delegateKey/helper";
+import { debugLog } from "../../shared/helpers/helper";
 
 export interface SendUserOpResult {
   txHash: Hex;
@@ -291,7 +291,6 @@ export async function buildSetTokenLimitUoUnsigned(
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("update");
 
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   const key192 = ("0x" + "00".repeat(24)) as Hex;
@@ -302,28 +301,11 @@ export async function buildSetTokenLimitUoUnsigned(
     args: [wallet, BigInt(key192)],
   })) + BigInt(nonceToAdd)) as bigint;
 
-  const packed: PackedUserOperation = {
-    sender: wallet,
-    nonce: nonce64,
-    initCode: "0x",
-    callData,
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
-    signature: "0x",
-  };
-
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
+  const nonceFull = nonce64;
 
   const unpacked: UnpackedUserOperationV07 = {
     sender: wallet,
-    nonce: toHex(nonce64),
+    nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
     verificationGasLimit: toHex(verificationGasLimit),
@@ -333,7 +315,9 @@ export async function buildSetTokenLimitUoUnsigned(
     signature: "0x",
   };
 
-  return { packed, unpacked, userOpHash };
+  const finalized = await finalizeUnsignedUserOp(wallet, nonceFull, gasFees, unpacked);
+
+  return finalized;
 }
 
 
@@ -363,7 +347,6 @@ export async function buildSetRecipientAllowedUoUnsigned(
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("update");
 
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   const key192 = ("0x" + "00".repeat(24)) as Hex;
@@ -374,28 +357,11 @@ export async function buildSetRecipientAllowedUoUnsigned(
     args: [wallet, BigInt(key192)],
   }) + BigInt(nonceToAdd)) as bigint;
 
-  const packed: PackedUserOperation = {
-    sender: wallet,
-    nonce: nonce64,
-    initCode: "0x",
-    callData,
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
-    signature: "0x",
-  };
-
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
+  const nonceFull = nonce64;
 
   const unpacked: UnpackedUserOperationV07 = {
     sender: wallet,
-    nonce: toHex(nonce64),
+    nonce: toHex(nonceFull),
     callData,
     callGasLimit: toHex(callGasLimit),
     verificationGasLimit: toHex(verificationGasLimit),
@@ -405,7 +371,9 @@ export async function buildSetRecipientAllowedUoUnsigned(
     signature: "0x",
   };
 
-  return { unpacked, packed, userOpHash };
+  const finalized = await finalizeUnsignedUserOp(wallet, nonceFull, gasFees, unpacked);
+
+  return finalized;
 }
 
 export async function buildSendRootUoUnsigned(target: Address, value: bigint, data: Hex = "0x", kernelAddress: Address, _nonceKey = 0) {
@@ -563,7 +531,6 @@ export async function buildInstallPermissionUoUnsigned(kernelAddress: Address, d
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("install");
 
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   const key192 = ("0x" + "00".repeat(24)) as Hex;
@@ -574,24 +541,6 @@ export async function buildInstallPermissionUoUnsigned(kernelAddress: Address, d
     args: [kernelAddress, BigInt(key192)],
   }) + BigInt(nonceToAdd)) as bigint;
   const nonceFull = nonce64;
-
-  const packed: PackedUserOperation = {
-    sender: kernelAddress,
-    nonce: nonceFull,
-    initCode: "0x",
-    callData,
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
-    signature: "0x",
-  };
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
     sender: kernelAddress,
@@ -604,7 +553,10 @@ export async function buildInstallPermissionUoUnsigned(kernelAddress: Address, d
     maxFeePerGas: toHex(maxFeePerGas),
     signature: "0x",
   };
-  return { unpacked, packed, userOpHash, permissionId, vId };
+
+  const finalized = await finalizeUnsignedUserOp(kernelAddress, nonceFull, gasFees, unpacked);
+
+  return { ...finalized, permissionId, vId };
 }
 
 // Install CallPolicy with specific permissions for delegatedEOA
@@ -659,7 +611,6 @@ export async function buildInstallCallPolicyUoUnsigned(
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("install");
 
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   // get nonce for entrypoint (not kernel)
@@ -672,28 +623,6 @@ export async function buildInstallCallPolicyUoUnsigned(
   }) + BigInt(nonceToAdd)) as bigint;
   const nonceFull = nonce64;
 
-  // create the packed data without signature
-  const packed: PackedUserOperation = {
-    sender: kernelAddress,
-    nonce: nonceFull,
-    initCode: "0x",
-    callData,
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
-    signature: "0x",
-  };
-
-  // get user op hash for prepared packed data
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
-
-  // signe with the root
   const unpacked: UnpackedUserOperationV07 = {
     sender: kernelAddress,
     nonce: toHex(nonceFull),
@@ -705,7 +634,10 @@ export async function buildInstallCallPolicyUoUnsigned(
     maxFeePerGas: toHex(maxFeePerGas),
     signature: "0x",
   };
-  return { unpacked, packed, userOpHash, permissionId, vId };
+
+  const finalized = await finalizeUnsignedUserOp(kernelAddress, nonceFull, gasFees, unpacked);
+
+  return { ...finalized, permissionId, vId };
 }
 
 export async function buildGrantAccessUoUnsigned(kernelAddress: Address, vId: Hex, selector: Hex, isGrant: boolean, nonceToAdd: number = 0) {
@@ -725,7 +657,6 @@ export async function buildGrantAccessUoUnsigned(kernelAddress: Address, vId: He
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("grant");
 
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   const key192 = ("0x" + "00".repeat(24)) as Hex;
@@ -736,25 +667,6 @@ export async function buildGrantAccessUoUnsigned(kernelAddress: Address, vId: He
     args: [kernelAddress, BigInt(key192)],
   }) + BigInt(nonceToAdd)) as bigint;
   const nonceFull = nonce64;
-
-  const packed: PackedUserOperation = {
-    sender: kernelAddress,
-    nonce: nonceFull,
-    initCode: "0x",
-    callData,
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
-    signature: "0x",
-  };
-
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
     sender: kernelAddress,
@@ -768,7 +680,9 @@ export async function buildGrantAccessUoUnsigned(kernelAddress: Address, vId: He
     signature: "0x",
   };
 
-  return { unpacked, packed, userOpHash };
+  const finalized = await finalizeUnsignedUserOp(kernelAddress, nonceFull, gasFees, unpacked);
+
+  return finalized;
 }
 
 // generate UserOperation signed by delegated key
@@ -891,7 +805,6 @@ export async function buildUninstallPermissionUoUnsigned(kernelAddress: Address,
   const { maxFeePerGas, maxPriorityFeePerGas } = await getCurrentGasPrices();
   const { verificationGasLimit, callGasLimit, preVerificationGas } = getOptimizedGasLimits("uninstall");
 
-  const accountGasLimits = packAccountGasLimits(verificationGasLimit, callGasLimit);
   const gasFees = packGasFees(maxPriorityFeePerGas, maxFeePerGas);
 
   const key192 = ("0x" + "00".repeat(24)) as Hex;
@@ -902,24 +815,6 @@ export async function buildUninstallPermissionUoUnsigned(kernelAddress: Address,
     args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   const nonceFull = nonce64;
-
-  const packed: PackedUserOperation = {
-    sender: kernelAddress,
-    nonce: nonceFull,
-    initCode: "0x",
-    callData,
-    accountGasLimits,
-    preVerificationGas,
-    gasFees,
-    paymasterAndData: "0x",
-    signature: "0x",
-  };
-  const userOpHash = (await publicClient.readContract({
-    address: ENTRY_POINT,
-    abi: entryPointAbi,
-    functionName: "getUserOpHash",
-    args: [packed],
-  })) as Hex;
 
   const unpacked: UnpackedUserOperationV07 = {
     sender: kernelAddress,
@@ -932,7 +827,10 @@ export async function buildUninstallPermissionUoUnsigned(kernelAddress: Address,
     maxFeePerGas: toHex(maxFeePerGas),
     signature: "0x",
   };
-  return { unpacked, packed, userOpHash };
+
+  const finalized = await finalizeUnsignedUserOp(kernelAddress, nonceFull, gasFees, unpacked);
+
+  return finalized;
 }
 
 export async function checkPrefund(userOp: PackedUserOperation | UnpackedUserOperationV07) {
@@ -988,4 +886,80 @@ export async function getRootCurrentNonce(kernelAddress: Address) {
     args: [kernelAddress, BigInt(key192)],
   })) as bigint;
   return nonce64;
+}
+
+async function finalizeUnsignedUserOp(
+  sender: Address,
+  nonceFull: bigint,
+  gasFees: Hex,
+  unpacked: UnpackedUserOperationV07
+) {
+  const patched = await estimateAndPatch(unpacked);
+
+  const callGasLimitBn = BigInt(patched.callGasLimit);
+  const verificationGasLimitBn = BigInt(patched.verificationGasLimit);
+  const preVerificationGasBn = BigInt(patched.preVerificationGas);
+  const accountGasLimits = packAccountGasLimits(verificationGasLimitBn, callGasLimitBn);
+
+  const packed: PackedUserOperation = {
+    sender,
+    nonce: nonceFull,
+    initCode: "0x",
+    callData: patched.callData,
+    accountGasLimits,
+    preVerificationGas: preVerificationGasBn,
+    gasFees,
+    paymasterAndData: "0x",
+    signature: "0x",
+  };
+
+  const userOpHash = (await publicClient.readContract({
+    address: ENTRY_POINT,
+    abi: entryPointAbi,
+    functionName: "getUserOpHash",
+    args: [packed],
+  })) as Hex;
+
+  const estimatedCostWei = await computeEstimatedCostWei(
+    patched,
+    callGasLimitBn,
+    verificationGasLimitBn,
+    preVerificationGasBn
+  );
+
+  return { unpacked: patched, packed, userOpHash, estimatedCostWei };
+}
+
+async function computeEstimatedCostWei(
+  unpacked: UnpackedUserOperationV07,
+  callGasLimitBn: bigint,
+  verificationGasLimitBn: bigint,
+  preVerificationGasBn: bigint
+) {
+  const maxFeeBi = BigInt(unpacked.maxFeePerGas);
+  const maxPriorityBi = BigInt(unpacked.maxPriorityFeePerGas);
+
+  const computeFromPrices = (baseFee: bigint | null) => {
+    const executionGas = callGasLimitBn + verificationGasLimitBn;
+
+    // Use the lesser of maxFee or (base fee + priority) for execution gas pricing
+    let executionPrice = maxFeeBi;
+    if (baseFee !== null && baseFee !== undefined && baseFee > 0n) {
+      const candidate = baseFee + maxPriorityBi;
+      executionPrice = candidate > maxFeeBi ? maxFeeBi : candidate;
+    }
+
+    const executionCost = executionGas * executionPrice;
+    const preVerificationCost = preVerificationGasBn * maxPriorityBi;
+    return executionCost + preVerificationCost;
+  };
+
+  try {
+    const pendingBlock = await publicClient.getBlock({ blockTag: "pending" });
+    const baseFee = pendingBlock.baseFeePerGas ?? null;
+    return computeFromPrices(baseFee);
+  } catch (err) {
+    console.warn("[userOps] failed to compute cost estimate:", err);
+    return computeFromPrices(null);
+  }
 }
