@@ -222,7 +222,14 @@ export const EntryPointDepositExecuteSchema: z.ZodType<executedEntryPointDeposit
   success: z.boolean(),
   data: z.object({
     txHash: hexString,
-    gasUsed: decimalString('gasUsed'),
+    gasUsed: z
+      .union([
+        decimalString('gasUsed'),
+        hexString.transform((value) => value),
+        z.number().transform((value) => value.toString()),
+        z.null().transform(() => undefined),
+      ])
+      .optional(),
   }),
   message: z.string(),
 });

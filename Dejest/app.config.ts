@@ -58,6 +58,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     KERNEL: process.env.IS_SKIP_AUTH === 'true' ? process.env.KERNEL : '',
     ENTRY_POINT: process.env.ENTRY_POINT ?? DEFAULT_ENTRYPOINT,
     SKIP_SEED: process.env.SKIP_SEED === 'true',
+    PIMLICIO_RPC: process.env.PIMLICIO_RPC,
     ZERODEV_RPC: process.env.ZERODEV_RPC,
     API_BASE_URL: process.env.API_BASE_URL ?? 'http://localhost:4000',
     PORT: process.env.PORT ?? '4000',

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Alert } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
 import { apiClient } from '@/services/api/apiClient';
@@ -30,8 +30,41 @@ const formatEthValue = (value?: string) => {
   }
 };
 
+const formatBigIntDisplay = (value: bigint) => {
+  const str = value.toString();
+  return str.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+};
+
+const formatGasUsed = (gasUsed?: unknown) => {
+  if (gasUsed === null || gasUsed === undefined) {
+    return 'Pending';
+  }
+  if (typeof gasUsed === 'string') {
+    const trimmed = gasUsed.trim();
+    if (!trimmed) {
+      return 'Pending';
+    }
+    try {
+      return `${formatBigIntDisplay(BigInt(trimmed))} gas`;
+    } catch {
+      return trimmed;
+    }
+  }
+  if (typeof gasUsed === 'number' || typeof gasUsed === 'bigint') {
+    try {
+      return `${formatBigIntDisplay(BigInt(gasUsed))} gas`;
+    } catch {
+      return `${gasUsed}`;
+    }
+  }
+  if (typeof gasUsed === 'object' && 'toString' in gasUsed) {
+    return String(gasUsed);
+  }
+  return 'Pending';
+};
+
 export default function EntryPointScreen() {
-  const { showSuccess, showError, showInfo } = useNotifications();
+  const { showSuccess, showError } = useNotifications();
   const [status, setStatus] = useState<PrefundCheckResponse | null>(null);
   const { wallet } = useWallet();
   const [isLoading, setIsLoading] = useState(true);
@@ -39,21 +72,6 @@ export default function EntryPointScreen() {
   const [isDepositing, setIsDepositing] = useState(false);
   const [depositAmount, setDepositAmount] = useState('0.01');
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
-  const [resultModal, setResultModal] = useState<{
-    visible: boolean;
-    success: boolean;
-    title: string;
-    message: string;
-    txHash?: string;
-    gasUsed?: string;
-    revertReason?: string;
-  }>({
-    visible: false,
-    success: true,
-    title: '',
-    message: '',
-  });
-
   const loadStatus = useCallback(async () => {
     try {
       setIsRefreshing(true);
@@ -73,24 +91,6 @@ export default function EntryPointScreen() {
     loadStatus();
   }, [loadStatus]);
 
-  const closeResultModal = () => {
-    setResultModal(prev => ({ ...prev, visible: false }));
-  };
-  
-  const showResultModal = (params: {
-    success: boolean;
-    title: string;
-    message: string;
-    txHash?: string;
-    gasUsed?: string;
-    revertReason?: string;
-  }) => {
-    setResultModal({
-      visible: true,
-      ...params,
-    });
-  };
-  
   const formatHash = (hash?: string) => hash ?? '';
 
   const handleDeposit = async () => {
@@ -102,7 +102,6 @@ export default function EntryPointScreen() {
 
     try {
       setIsDepositing(true);
-      closeResultModal();
       console.log('[EntryPoint] Attempting deposit of', depositAmount, 'ETH');
 
 
@@ -116,6 +115,7 @@ export default function EntryPointScreen() {
 
       if (!isDepositPrepareSuccess(response)) {
         console.error("Installation failed:", response.error);
+        showError(response.error || 'Unable to prepare deposit.', { title: 'Deposit failed' });
         return;
       }
 
@@ -133,22 +133,20 @@ export default function EntryPointScreen() {
 
       if (!isDepositExecuteSuccess(resultDeposit)) {
         console.error("Installation failed:", resultDeposit.error);
-        showResultModal({
-          success: false,
-          title: 'Deposit Failed',
-          message: resultDeposit.error || 'Unable to deposit to EntryPoint.',
-        });
-        showError("Deposit was failed")
+        showError(resultDeposit.error || 'Unable to deposit to EntryPoint.', { title: 'Deposit failed' });
       } else {
-        showResultModal({
-          success: true,
-          title: 'Deposit Confirmed',
-          message: resultDeposit.message || 'Deposit transaction sent.',
-          txHash: resultDeposit.data.txHash,
-          gasUsed: resultDeposit.data.gasUsed,
-        });
         await loadStatus();
-        showSuccess("Deposit was confirmed")
+        const gasUsedMessage = resultDeposit.data.gasUsed
+          ? `Gas used: ${formatGasUsed(resultDeposit.data.gasUsed)}`
+          : 'Gas used: Pending';
+        // showSuccess(
+        //   `${resultDeposit.message || 'Deposit transaction sent.'}\n${gasUsedMessage}\nTx: ${formatHash(resultDeposit.data.txHash)}`,
+        //   { title: 'Deposit confirmed' },
+        // );
+        showSuccess(
+          `${resultDeposit.message || 'Deposit transaction sent.'}`,
+          { title: 'Deposit confirmed' },
+        );
       }
 
     } catch (error: any) {
@@ -161,14 +159,7 @@ export default function EntryPointScreen() {
                           error?.message || 
                           'Unable to deposit to EntryPoint.';
       
-      showResultModal({
-        success: false,
-        title: 'Deposit Failed',
-        message: errorMessage,
-        txHash: backendData?.txHash,
-        gasUsed: backendData?.gasUsed,
-        revertReason: backendData?.revertReason,
-      });
+      showError(errorMessage, { title: 'Deposit failed' });
     } finally {
       setIsDepositing(false);
     }
@@ -306,51 +297,6 @@ export default function EntryPointScreen() {
           </Text>
         </View>
       </ScrollView>
-      <Modal
-        transparent
-        visible={resultModal.visible}
-        animationType="fade"
-        onRequestClose={closeResultModal}
-      >
-        <View style={styles.resultModalOverlay}>
-          <View style={[
-            styles.resultModalCard,
-            resultModal.success ? styles.resultModalSuccess : styles.resultModalError
-          ]}>
-            <IconSymbol
-              name={resultModal.success ? 'checkmark.circle.fill' : 'xmark.octagon.fill'}
-              size={32}
-              color={resultModal.success ? '#10B981' : '#F87171'}
-            />
-            <Text style={styles.resultModalTitle}>{resultModal.title}</Text>
-            <Text style={styles.resultModalMessage}>{resultModal.message}</Text>
-            
-            {resultModal.txHash && (
-              <View style={styles.resultModalDetail}>
-                <Text style={styles.resultModalDetailLabel}>Transaction</Text>
-                <Text style={styles.resultModalDetailValue}>{formatHash(resultModal.txHash)}</Text>
-              </View>
-            )}
-            
-            {resultModal.gasUsed && (
-              <View style={styles.resultModalDetail}>
-                <Text style={styles.resultModalDetailLabel}>Gas Used</Text>
-                <Text style={styles.resultModalDetailValue}>{resultModal.gasUsed}</Text>
-              </View>
-            )}
-            
-            {!resultModal.success && resultModal.revertReason && (
-              <Text style={styles.resultModalErrorReason} numberOfLines={3}>
-                {resultModal.revertReason}
-              </Text>
-            )}
-            
-            <TouchableOpacity style={styles.resultModalButton} onPress={closeResultModal}>
-              <Text style={styles.resultModalButtonText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -585,75 +531,5 @@ const styles = StyleSheet.create({
     color: '#A0A0A0',
     fontSize: 13,
     lineHeight: 18,
-  },
-  resultModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  resultModalCard: {
-    width: '100%',
-    borderRadius: 20,
-    padding: 24,
-    alignItems: 'center',
-    gap: 12,
-  },
-  resultModalSuccess: {
-    backgroundColor: '#12211b',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.3)',
-  },
-  resultModalError: {
-    backgroundColor: '#261519',
-    borderWidth: 1,
-    borderColor: 'rgba(248, 113, 113, 0.3)',
-  },
-  resultModalTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  resultModalMessage: {
-    color: '#E5E5E5',
-    fontSize: 15,
-    textAlign: 'center',
-  },
-  resultModalDetail: {
-    width: '100%',
-    paddingVertical: 6,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  resultModalDetailLabel: {
-    color: '#A0A0A0',
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  resultModalDetailValue: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontFamily: 'Menlo',
-    marginTop: 4,
-  },
-  resultModalErrorReason: {
-    color: '#FCA5A5',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  resultModalButton: {
-    marginTop: 8,
-    backgroundColor: '#8B5CF6',
-    borderRadius: 999,
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-  },
-  resultModalButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 15,
   },
 });

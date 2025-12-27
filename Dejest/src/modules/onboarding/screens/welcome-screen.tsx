@@ -1,9 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Image, View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { IconSymbol } from '@/shared/ui/icon-symbol';
-import { Colors } from '@/shared/constants/theme';
 
 export default function WelcomeScreen() {
   return (
@@ -12,7 +11,11 @@ export default function WelcomeScreen() {
         {/* Logo/Icon */}
         <View style={styles.logoContainer}>
           <View style={styles.logo}>
-            <IconSymbol name="wallet.fill" size={80} color="#8B5CF6" />
+            <Image
+              source={require('../../../shared/assets/images/logo.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
           </View>
           <Text style={styles.appName}>Dejest</Text>
           <Text style={styles.tagline}>Your Secure Crypto Wallet</Text>
@@ -74,12 +77,16 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#1A1A1A',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
     borderWidth: 2,
     borderColor: '#8B5CF6',
+  },
+  logoImage: {
+    width: 130,
+    height: 130,
   },
   appName: {
     fontSize: 32,
@@ -136,4 +143,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

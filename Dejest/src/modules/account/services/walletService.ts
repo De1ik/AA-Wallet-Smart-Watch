@@ -122,7 +122,7 @@ export async function sendTransaction({
         tokenAddress,
     });
 
-    const { unpacked: unp2, userOpHash: uoh2 } = await buildSendRootUO(to, amountInWei, '0x', 0)
+    const { unpacked: unp2, userOpHash: uoh2 } = await buildSendRootUO(to, amountInWei, '0x')
     console.log('[sendTransaction] -> UOHASH:', uoh2);
     const txHash = await sendUserOpV07(unp2);
     console.log('[sendTransaction] -> txHash:', txHash);
