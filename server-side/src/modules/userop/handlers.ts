@@ -16,6 +16,7 @@ export async function handlePrepare(reqBody: unknown) {
       return { status: 400, body: { error: parsed.error.issues[0].message } };
     }
     const { to, amountWei, data, delegatedEOA, kernelAddress, tokenAddress } = parsed.data;
+    const requestedAmountWei = amountWei;
 
     const permissionId = getPermissionId(kernelAddress, delegatedEOA);
     if (!permissionId) {
@@ -50,7 +51,13 @@ export async function handlePrepare(reqBody: unknown) {
       status: 200,
       body: {
         userOpHash,
-        echo: { permissionId, to, amountWei: valueToSend.toString(), data: callData, tokenAddress: tokenAddress ?? null },
+        echo: {
+          permissionId,
+          to,
+          amountWei: requestedAmountWei.toString(),
+          data: callData,
+          tokenAddress: tokenAddress ?? null,
+        },
       },
     };
   } catch (err: any) {

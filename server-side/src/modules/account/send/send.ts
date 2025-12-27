@@ -1,4 +1,4 @@
-import { isAddress, parseAbi, parseEther } from "viem";
+import { isAddress, parseAbi, parseEther, parseUnits } from "viem";
 import { z } from "zod";
 
 import type { HttpResult, ErrorResponse } from "../../../shared/http/apiResponse";
@@ -33,7 +33,7 @@ export async function handleSend(input: unknown): Promise<HttpResult<SendRespons
         functionName: "decimals",
       })) as number;
 
-      const amountInWei = BigInt(Math.floor(amount * 10 ** decimals));
+      const amountInWei = parseUnits(amount, decimals);
 
       debugLog(`[Send] Building ERC20 transfer: ${amount} * 10^${decimals} = ${amountInWei.toString()}`);
 
@@ -46,7 +46,7 @@ export async function handleSend(input: unknown): Promise<HttpResult<SendRespons
       );
       ({ packed, unpacked, userOpHash } = result);
     } else {
-      const amountInWei = parseEther(amount.toString());
+      const amountInWei = parseEther(amount);
 
       debugLog(`[Send] Building ETH transfer: ${amount} ETH = ${amountInWei.toString()} wei`);
 

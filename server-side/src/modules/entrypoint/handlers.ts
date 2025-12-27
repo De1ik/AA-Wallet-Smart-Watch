@@ -74,10 +74,9 @@ export async function handlePrepareEntrypointDeposit(
   const { amountEth, kernelAddress } = parsed.data;
 
   try {
-    const amountStr = amountEth.toString();
-    debugLog("AMOUNT to DEPOSIT (ETH):", amountStr);
+    debugLog("AMOUNT to DEPOSIT (ETH):", amountEth);
 
-    const amountWei = parseEther(amountStr);
+    const amountWei = parseEther(amountEth);
 
     let packed, unpacked, userOpHash;
     try {

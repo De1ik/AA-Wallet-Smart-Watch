@@ -10,7 +10,7 @@ export const addressSchema = z
 
 export const amountSchema = z
   .string()
-  .transform((v) => parseFloat(v))
-  .refine((v) => !isNaN(v), { message: "Amount must be a number" })
-  .refine((v) => v > 0, { message: "Amount must be positive number" });
-
+  .trim()
+  .refine((v) => v.length > 0, { message: "Amount must be provided" })
+  .refine((v) => /^\d+(\.\d+)?$/.test(v), { message: "Amount must be a number" })
+  .refine((v) => Number(v) > 0, { message: "Amount must be positive number" });
