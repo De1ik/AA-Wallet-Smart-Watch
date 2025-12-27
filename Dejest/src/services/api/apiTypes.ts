@@ -91,6 +91,6 @@ export interface prepareEntryPointDeposit {
 
 export interface executedEntryPointDeposit {
   success: boolean;
-  data: { txHash: string, gasUsed: string };
+  data: { txHash: string, gasUsed?: string };
   message: string;
 }

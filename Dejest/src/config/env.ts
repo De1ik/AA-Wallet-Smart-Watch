@@ -9,6 +9,7 @@ export interface AppConfig {
   KERNEL?: string;
   ENTRY_POINT?: string;
   SKIP_SEED: boolean;
+  PIMLICIO_RPC?: string;
   ZERODEV_RPC?: string;
   ZERODEV_PROJECT_ID?: string;
   PORT: string;
@@ -30,6 +31,7 @@ export const getAppConfig = (): AppConfig => {
     KERNEL: extra?.KERNEL,
     ENTRY_POINT: extra?.ENTRY_POINT,
     SKIP_SEED: extra?.SKIP_SEED ?? false,
+    PIMLICIO_RPC: extra?.PIMLICIO_RPC,
     ZERODEV_RPC: extra?.ZERODEV_RPC,
     ZERODEV_PROJECT_ID: extra?.ZERODEV_PROJECT_ID,
     PORT: extra?.PORT ?? '4000',
@@ -50,6 +52,7 @@ export const getEntryPointAddress = (): string | undefined => {
   return config.ENTRY_POINT;
 };
 export const getPrivateKey = (): string | undefined => getAppConfig().PRIVATE_KEY;
+export const getPimlicoRpc = (): string | undefined => getAppConfig().PIMLICIO_RPC;
 export const getZeroDevRpc = (): string | undefined => getAppConfig().ZERODEV_RPC;
 export const getZeroDevProjectId = (): string | undefined => getAppConfig().ZERODEV_PROJECT_ID;
 export const getPort = (): string => getAppConfig().PORT;
@@ -90,6 +93,7 @@ export const config = {
   KERNEL: getKernelAddress(),
   ENTRY_POINT: getEntryPointAddress(),
   PRIVATE_KEY: getPrivateKey(),
+  PIMLICIO_RPC: getPimlicoRpc(),
   ZERODEV_RPC: getZeroDevRpc(),
   ZERODEV_PROJECT_ID: getZeroDevProjectId(),
   PORT: getPort(),
